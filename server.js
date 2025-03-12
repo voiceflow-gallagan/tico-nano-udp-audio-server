@@ -6,6 +6,18 @@ const axios = require('axios')
 const FormData = require('form-data')
 const { Lame } = require('node-lame')
 const { Readable } = require('stream')
+require('dotenv').config()
+
+// Environment Variables
+const VF_DM_API_KEY = process.env.VF_DM_API_KEY
+const WHISPER_SERVER_URL = process.env.WHISPER_SERVER_URL
+
+if (!VF_DM_API_KEY || !WHISPER_SERVER_URL) {
+  console.error(
+    'Missing required environment variables. Please check your .env file.'
+  )
+  process.exit(1)
+}
 
 // ---------------------------
 // Global Buffer for Audio Data
@@ -274,7 +286,7 @@ async function transcribeAudio(audioBuffer) {
 
   try {
     const response = await axios.post(
-      'http://5.161.85.204:9002/asr?encode=false&vad_filter=true&task=transcribe&output=json&initial_prompt=You%20analyze%20a%20conversation%20beetween%20Voiceflow%20teamates.%20Here%20is%20a%20list%20of%20possible%20names%3A%20NiKo%2C%20Nina%2C%20Henry%2C%20Daniel%2C%20Yuksel.',
+      `${WHISPER_SERVER_URL}/asr?encode=false&vad_filter=true&task=transcribe&output=json&initial_prompt=You%20analyze%20a%20conversation%20beetween%20Voiceflow%20teamates.%20Here%20is%20a%20list%20of%20possible%20names%3A%20NiKo%2C%20Nina%2C%20Henry%2C%20Daniel%2C%20Yuksel.`,
       form,
       {
         headers: {
@@ -345,7 +357,7 @@ async function getVoiceflowResponse(transcribedText) {
       },
       {
         headers: {
-          Authorization: 'VF.DM.67b87c7ef120ae137705a311.eOl0HlxZ3P3LgiHY',
+          Authorization: VF_DM_API_KEY,
           'Content-Type': 'application/json',
         },
       }
