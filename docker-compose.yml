@@ -1,5 +1,5 @@
 services:
-  tico-vban-server:
+  tico-nano-udp-audio-server:
     build: .
     network_mode: "host"
     environment:
