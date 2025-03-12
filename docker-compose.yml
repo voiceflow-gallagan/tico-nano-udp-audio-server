@@ -1,18 +1,10 @@
 services:
   vban-server:
     build: .
-    ports:
-      - "12345:12345/tcp"  # TCP port for transcription service
-      - "6980:6980/udp"    # UDP port for VBAN
+    network_mode: "host"  # Use host networking
     environment:
       - VF_DM_API_KEY=${VF_DM_API_KEY}
       - WHISPER_SERVER_URL=${WHISPER_SERVER_URL}
       - UDP_PORT=6980
       - TCP_PORT=12345
     restart: unless-stopped
-    networks:
-      - vban-network
-
-networks:
-  vban-network:
-    driver: bridge
