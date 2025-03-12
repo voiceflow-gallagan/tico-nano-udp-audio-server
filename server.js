@@ -56,9 +56,6 @@ udpServer.on('error', (err) => {
 })
 
 udpServer.on('message', (msg, rinfo) => {
-  console.log(`\n[UDP] Packet received from ${rinfo.address}:${rinfo.port}`)
-  console.log(`[UDP] Packet size: ${msg.length} bytes`)
-
   lastBufferClearTime = Date.now()
 
   // Process raw 16-bit PCM audio data (16kHz, mono)
@@ -83,18 +80,18 @@ udpServer.on('message', (msg, rinfo) => {
   }
 
   if (hasSound) {
-    console.log('[UDP] Sound detected in packet')
+    // console.log('[UDP] Sound detected in packet')
   }
 
   audioBuffer = Buffer.concat([audioBuffer, processedData])
-  console.log(`[UDP] Buffer size after raw data: ${audioBuffer.length} bytes`)
+  // console.log(`[UDP] Buffer size after raw data: ${audioBuffer.length} bytes`)
 })
 
 udpServer.on('listening', () => {
   const address = udpServer.address()
   console.log(`UDP server listening on ${address.address}:${address.port}`)
   console.log(
-    'Make sure your source (TicoNano) is configured to stream to this address and port'
+    'Make sure your source (Tico Nano) is configured to stream to this address and port'
   )
   console.log(`UDP Server Details:
     Address: ${address.address}
@@ -389,7 +386,7 @@ async function handleBase64Audio(audioUrl, socket) {
 
     // Downsample with interpolation
     const adjustedSamples = []
-    const ratio = 3 // 44.1kHz to ~14.7kHz
+    const ratio = 2 // 44.1kHz to ~14.7kHz
 
     for (let i = 0; i < samples.length - ratio; i += ratio) {
       const sample = Math.round(
