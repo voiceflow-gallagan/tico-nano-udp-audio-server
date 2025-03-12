@@ -11,6 +11,8 @@ require('dotenv').config()
 // Environment Variables
 const VF_DM_API_KEY = process.env.VF_DM_API_KEY
 const WHISPER_SERVER_URL = process.env.WHISPER_SERVER_URL
+const UDP_PORT = parseInt(process.env.UDP_PORT || '6980') // VBAN default port
+const TCP_PORT = parseInt(process.env.TCP_PORT || '12345') // TCP server port
 
 if (!VF_DM_API_KEY || !WHISPER_SERVER_URL) {
   console.error(
@@ -27,7 +29,7 @@ let audioBuffer = Buffer.alloc(0)
 // ---------------------------
 // UDP Server (VBAN Receiver)
 // ---------------------------
-const udpPort = 6980 // VBAN default port (adjust if needed)
+const udpPort = UDP_PORT // Use environment variable
 const udpServer = dgram.createSocket('udp4')
 
 udpServer.on('error', (err) => {
@@ -52,7 +54,7 @@ udpServer.on('listening', () => {
 udpServer.bind(udpPort)
 
 // TCP Server (Transcription Request and Audio Streaming)
-const tcpPort = 12345 // Port on which the Atom Echo connects after finishing
+const tcpPort = TCP_PORT // Use environment variable
 const tcpServer = net.createServer((socket) => {
   console.log('TCP client connected for transcription/audio streaming.')
 
