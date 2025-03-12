@@ -91,16 +91,34 @@ udpServer.on('message', (msg, rinfo) => {
     // Process as raw 16-bit PCM audio data from M5Stack (16kHz, mono)
     console.log('[UDP] Processing as raw audio data')
 
-    // Convert from Int16 to proper PCM samples
+    // Since we're receiving raw 16-bit PCM data, we can append it directly
+    // but let's validate the samples first
     const samples = new Int16Array(msg.buffer, msg.byteOffset, msg.length / 2)
     const processedData = Buffer.alloc(msg.length)
+    let hasSound = false
+    const threshold = 500 // Adjust this threshold for noise detection
 
-    // Process each sample (optional gain adjustment)
+    // Process each sample with basic noise gate and gain
     for (let i = 0; i < samples.length; i++) {
-      // Apply gain boost and ensure we don't clip
-      const gain = 2.0 // Adjust this value to boost audio level
-      const sample = Math.max(-32768, Math.min(32767, samples[i] * gain))
+      let sample = samples[i]
+
+      // Apply noise gate
+      if (Math.abs(sample) < threshold) {
+        sample = 0
+      } else {
+        // If we detect a sample above threshold, mark that we have sound
+        hasSound = true
+
+        // Apply gain boost
+        const gain = 5.0 // Increased gain for better speech detection
+        sample = Math.max(-32768, Math.min(32767, Math.round(sample * gain)))
+      }
+
       processedData.writeInt16LE(sample, i * 2)
+    }
+
+    if (hasSound) {
+      console.log('[UDP] Sound detected in packet')
     }
 
     audioBuffer = Buffer.concat([audioBuffer, processedData])
@@ -151,6 +169,19 @@ const tcpServer = net.createServer((socket) => {
       JSON.stringify({
         error:
           'No audio data received. Please ensure VBAN is streaming to UDP port 6980 before connecting.',
+      }) + '\n'
+    )
+    socket.end()
+    return
+  }
+
+  // Validate audio before sending to transcription
+  if (!validateAudioBuffer(audioBuffer)) {
+    console.log('[TCP] Audio validation failed - insufficient audio content')
+    socket.write(
+      JSON.stringify({
+        error:
+          'No significant audio content detected. Please speak louder or check your microphone.',
       }) + '\n'
     )
     socket.end()
@@ -364,7 +395,45 @@ function addWavHeader(pcmData) {
   header.write('data', 36)
   header.writeUInt32LE(subChunk2Size, 40)
 
+  // Create WAV file with header and PCM data
   return Buffer.concat([header, pcmData])
+}
+
+// Add a function to validate audio before transcription
+function validateAudioBuffer(buffer) {
+  if (buffer.length < 1024) {
+    // Minimum size check
+    console.log('[Audio] Buffer too small for speech detection')
+    return false
+  }
+
+  // Check if there's any significant audio content
+  const samples = new Int16Array(
+    buffer.buffer,
+    buffer.byteOffset,
+    buffer.length / 2
+  )
+  let maxAmplitude = 0
+  let totalEnergy = 0
+
+  for (let i = 0; i < samples.length; i++) {
+    const amplitude = Math.abs(samples[i])
+    maxAmplitude = Math.max(maxAmplitude, amplitude)
+    totalEnergy += amplitude
+  }
+
+  const averageEnergy = totalEnergy / samples.length
+  console.log(
+    `[Audio] Max amplitude: ${maxAmplitude}, Average energy: ${averageEnergy}`
+  )
+
+  // Thresholds for audio validation
+  if (maxAmplitude < 1000 || averageEnergy < 100) {
+    console.log('[Audio] Audio levels too low for speech detection')
+    return false
+  }
+
+  return true
 }
 
 // ---------------------------
