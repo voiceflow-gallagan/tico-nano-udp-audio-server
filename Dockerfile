@@ -1,4 +1,10 @@
-FROM node:18-slim
+FROM node:20-slim
+
+# Install lame package
+RUN apt-get update && \
+    apt-get install -y lame && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
