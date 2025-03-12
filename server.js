@@ -57,22 +57,11 @@ udpServer.on('error', (err) => {
 })
 
 udpServer.on('message', (msg, rinfo) => {
+  // Log every UDP packet immediately
+  console.log(`\n[UDP] Packet received from ${rinfo.address}:${rinfo.port}`)
+  console.log(`[UDP] Packet size: ${msg.length} bytes`)
+
   lastBufferClearTime = Date.now() // Update last activity time
-
-  // Log raw packet info
-  console.log(
-    `Raw UDP packet received: ${msg.length} bytes from ${rinfo.address}:${rinfo.port}`
-  )
-
-  // VBAN header inspection
-  if (msg.length >= 28) {
-    const vbanHeader = msg.slice(0, 4).toString()
-    const sampleRate = msg.readUInt32LE(4)
-    const samplesPerFrame = msg.readUInt8(8)
-    console.log(
-      `VBAN Header: "${vbanHeader}", Sample Rate: ${sampleRate}, Samples/Frame: ${samplesPerFrame}`
-    )
-  }
 
   // Assume VBAN packet: first 28 bytes = header, rest = PCM payload
   const headerSize = 28
@@ -80,10 +69,17 @@ udpServer.on('message', (msg, rinfo) => {
     let payload = msg.slice(headerSize)
     audioBuffer = Buffer.concat([audioBuffer, payload])
     console.log(
-      `Processed VBAN packet from ${rinfo.address}:${rinfo.port}, buffer size now: ${audioBuffer.length}`
+      `[UDP] Processed VBAN packet, buffer size now: ${audioBuffer.length} bytes`
     )
   } else {
-    console.log(`Received packet too small to be VBAN: ${msg.length} bytes`)
+    console.log(
+      `[UDP] Packet too small for VBAN (${msg.length} < ${headerSize} bytes)`
+    )
+    try {
+      console.log(`[UDP] Raw data: "${msg.toString()}"`)
+    } catch (e) {
+      console.log(`[UDP] Could not convert to string: ${e.message}`)
+    }
   }
 })
 
@@ -108,19 +104,28 @@ udpServer.bind(udpPort, '0.0.0.0') // Explicitly bind to all interfaces
 // TCP Server (Transcription Request and Audio Streaming)
 const tcpPort = TCP_PORT // Use environment variable
 const tcpServer = net.createServer((socket) => {
-  const clientAddress = socket.remoteAddress
+  // Convert IPv6 to IPv4 if it's a mapped address
+  let clientAddress = socket.remoteAddress
+  if (clientAddress.startsWith('::ffff:')) {
+    clientAddress = clientAddress.substring(7)
+  }
   const clientPort = socket.remotePort
-  console.log(`TCP client connected from ${clientAddress}:${clientPort}`)
+
+  console.log(`[TCP] Client connected from ${clientAddress}:${clientPort}`)
+  console.log(`[TCP] Current audio buffer size: ${audioBuffer.length} bytes`)
 
   // Add buffer size check
   if (audioBuffer.length === 0) {
     console.error(
-      `Empty audio buffer received for client ${clientAddress}:${clientPort}`
+      `[TCP] Empty audio buffer for client ${clientAddress}:${clientPort}`
+    )
+    console.log(
+      '[TCP] Make sure VBAN is streaming to UDP port 6980 before connecting via TCP'
     )
     socket.write(
       JSON.stringify({
         error:
-          'No audio data received. Make sure VBAN is streaming to UDP port 6980 first.',
+          'No audio data received. Please ensure VBAN is streaming to UDP port 6980 before connecting.',
       }) + '\n'
     )
     socket.end()
