@@ -386,7 +386,7 @@ async function handleBase64Audio(audioUrl, socket) {
 
     // Downsample with interpolation
     const adjustedSamples = []
-    const ratio = 2 // 44.1kHz to ~14.7kHz
+    const ratio = 2.8 // 44.1kHz to ~14.7kHz
 
     for (let i = 0; i < samples.length - ratio; i += ratio) {
       const sample = Math.round(
