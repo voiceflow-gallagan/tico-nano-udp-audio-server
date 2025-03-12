@@ -5,24 +5,28 @@ let packetCount = 0
 const startTime = Date.now()
 let audioBuffer = Buffer.alloc(0)
 let lastBufferSize = 0
+let lastStatsTime = Date.now()
+
+// Print startup banner
+console.log('\n=== VBAN Test Server (Enhanced) ===')
+console.log('Node.js Version:', process.version)
+console.log('Platform:', process.platform)
+console.log('Process ID:', process.pid)
 
 server.on('error', (err) => {
-  console.log(`Server error:\n${err.stack}`)
+  console.error(`\nServer error:\n${err.stack}`)
   server.close()
 })
 
 server.on('message', (msg, rinfo) => {
   packetCount++
+  const now = Date.now()
 
-  // Only log every 100th packet to avoid console spam
-  const shouldLog = packetCount % 100 === 0
+  // Always log the first 5 packets, then every 100th
+  const shouldLog = packetCount <= 5 || packetCount % 100 === 0
 
-  if (shouldLog) {
-    console.log(
-      `\n[Packet #${packetCount}] From ${rinfo.address}:${rinfo.port}`
-    )
-    console.log(`Packet size: ${msg.length} bytes`)
-  }
+  console.log(`\nPacket #${packetCount} from ${rinfo.address}:${rinfo.port}`)
+  console.log(`Size: ${msg.length} bytes`)
 
   // VBAN packet processing
   if (msg.length >= 28) {
@@ -35,54 +39,58 @@ server.on('message', (msg, rinfo) => {
         const samplesPerFrame = msg.readUInt8(8)
         const channels = msg.readUInt8(9)
         const dataFormat = msg.readUInt8(10)
+        const protocolVersion = msg.readUInt8(11)
         const streamName = msg.slice(16, 24).toString().replace(/\0/g, '')
+        const frameCounter = msg.readUInt32LE(24)
 
-        if (shouldLog) {
-          console.log('VBAN Header Analysis:')
-          console.log(`  Sample Rate: ${sampleRate} Hz`)
-          console.log(`  Samples per Frame: ${samplesPerFrame}`)
-          console.log(`  Channels: ${channels}`)
-          console.log(`  Data Format: ${dataFormat}`)
-          console.log(`  Stream Name: "${streamName}"`)
-        }
+        console.log('VBAN Header Analysis:')
+        console.log(`  Magic String: "${vbanStr}"`)
+        console.log(`  Sample Rate: ${sampleRate} Hz`)
+        console.log(`  Samples/Frame: ${samplesPerFrame}`)
+        console.log(`  Channels: ${channels}`)
+        console.log(`  Data Format: ${dataFormat}`)
+        console.log(`  Protocol Ver: ${protocolVersion}`)
+        console.log(`  Stream Name: "${streamName}"`)
+        console.log(`  Frame Counter: ${frameCounter}`)
 
         // Extract audio payload
         const payload = msg.slice(28)
         audioBuffer = Buffer.concat([audioBuffer, payload])
-
-        if (shouldLog) {
-          console.log(`  Total audio buffer size: ${audioBuffer.length} bytes`)
-        }
-      } else if (shouldLog) {
-        console.log(`Invalid VBAN header: "${vbanStr}"`)
+        console.log(`  Payload size: ${payload.length} bytes`)
+        console.log(`  Total buffer: ${audioBuffer.length} bytes`)
+      } else {
+        console.log(`Warning: Invalid VBAN header: "${vbanStr}"`)
       }
     } catch (e) {
-      console.log('Error processing VBAN packet:', e.message)
+      console.error('Error processing VBAN packet:', e)
     }
-  } else if (shouldLog) {
-    console.log('Non-VBAN packet received')
-    console.log('Raw data:', msg.toString())
+  } else {
+    console.log('Warning: Packet too small to be VBAN')
+    try {
+      console.log('Raw data:', msg.toString())
+    } catch (e) {
+      console.log('Could not convert packet to string:', e.message)
+    }
   }
 
   // Print statistics every 5 seconds
-  if (Date.now() - startTime > 5000 && audioBuffer.length !== lastBufferSize) {
-    const runningTime = (Date.now() - startTime) / 1000
-    console.log(`\nStatistics after ${runningTime.toFixed(1)} seconds:`)
+  if (now - lastStatsTime >= 5000) {
+    const runningTime = (now - startTime) / 1000
+    console.log('\n=== Statistics Update ===')
+    console.log(`Running time: ${runningTime.toFixed(1)} seconds`)
     console.log(`Total packets: ${packetCount}`)
-    console.log(
-      `Packet rate: ${(packetCount / runningTime).toFixed(1)} packets/sec`
-    )
-    console.log(`Audio buffer size: ${audioBuffer.length} bytes`)
-    lastBufferSize = audioBuffer.length
+    console.log(`Packet rate: ${(packetCount / runningTime).toFixed(1)}/sec`)
+    console.log(`Buffer size: ${audioBuffer.length} bytes`)
+    lastStatsTime = now
   }
 })
 
 server.on('listening', () => {
   const address = server.address()
-  console.log(`\nVBAN Test Server (Enhanced)`)
-  console.log(`Listening on ${address.address}:${address.port}`)
-  console.log(`Node.js ${process.version}`)
-  console.log(`Platform: ${process.platform}`)
+  console.log('\nServer Details:')
+  console.log(`Local Address: ${address.address}`)
+  console.log(`Port: ${address.port}`)
+  console.log(`Family: ${address.family}`)
   console.log('\nWaiting for VBAN packets...\n')
 })
 
@@ -91,14 +99,12 @@ server.bind(6980, '0.0.0.0')
 
 // Handle graceful shutdown
 process.on('SIGINT', () => {
-  console.log('\nShutting down...')
   const runningTime = (Date.now() - startTime) / 1000
-  console.log(`\nFinal Statistics:`)
+  console.log('\n\nShutting down...')
+  console.log('\nFinal Statistics:')
   console.log(`Run time: ${runningTime.toFixed(1)} seconds`)
   console.log(`Total packets: ${packetCount}`)
-  console.log(
-    `Average packet rate: ${(packetCount / runningTime).toFixed(1)} packets/sec`
-  )
-  console.log(`Final audio buffer size: ${audioBuffer.length} bytes`)
+  console.log(`Average rate: ${(packetCount / runningTime).toFixed(1)}/sec`)
+  console.log(`Final buffer: ${audioBuffer.length} bytes`)
   server.close(() => process.exit(0))
 })

@@ -2,7 +2,7 @@ const dgram = require('dgram')
 const client = dgram.createSocket('udp4')
 
 // Create a simple VBAN header
-function createVBANHeader() {
+function createVBANHeader(frameCounter = 0) {
   const header = Buffer.alloc(28) // VBAN header is 28 bytes
 
   // 'VBAN' magic string
@@ -26,8 +26,8 @@ function createVBANHeader() {
   // Stream name "test1"
   header.write('test1\0\0\0', 16) // Null-padded stream name
 
-  // Frame counter (0 for this test)
-  header.writeUInt32LE(0, 24)
+  // Frame counter
+  header.writeUInt32LE(frameCounter, 24)
 
   return header
 }
@@ -43,23 +43,77 @@ function createDummyAudio() {
   return buffer
 }
 
-// Combine header and audio data
-const packet = Buffer.concat([createVBANHeader(), createDummyAudio()])
-
-// Send test packet
+// Server configuration
 const SERVER_IP = '5.161.85.204' // Your server IP
 const SERVER_PORT = 6980
+const TOTAL_PACKETS = 10
+const PACKET_DELAY_MS = 100
 
-console.log('Sending VBAN test packet...')
-console.log(`Packet size: ${packet.length} bytes`)
-console.log('Header: VBAN + 44.1kHz + mono + int16')
-console.log('Samples per frame: 64')
+console.log(`\nVBAN Test Client`)
+console.log(`Target: ${SERVER_IP}:${SERVER_PORT}`)
+console.log(
+  `Sending ${TOTAL_PACKETS} test packets with ${PACKET_DELAY_MS}ms delay between packets`
+)
+console.log('Configuration: 44.1kHz, mono, int16, 64 samples per frame\n')
 
-client.send(packet, SERVER_PORT, SERVER_IP, (err) => {
-  if (err) {
-    console.error('Error sending packet:', err)
-  } else {
-    console.log('Test packet sent successfully')
-  }
+// Handle errors
+client.on('error', (err) => {
+  console.error('Client error:', err)
   client.close()
+})
+
+// Send packets with delay
+let packetsSent = 0
+let lastPacketTime = Date.now()
+
+function sendNextPacket() {
+  if (packetsSent >= TOTAL_PACKETS) {
+    console.log('\nAll packets sent. Waiting 1 second before closing...')
+    setTimeout(() => {
+      console.log('Closing client.')
+      client.close()
+    }, 1000)
+    return
+  }
+
+  const packet = Buffer.concat([
+    createVBANHeader(packetsSent),
+    createDummyAudio(),
+  ])
+  const now = Date.now()
+  const timeSinceLastPacket = now - lastPacketTime
+
+  console.log(
+    `Sending packet #${packetsSent + 1}/${TOTAL_PACKETS} (${
+      packet.length
+    } bytes)`
+  )
+
+  client.send(packet, SERVER_PORT, SERVER_IP, (err) => {
+    if (err) {
+      console.error(`Error sending packet #${packetsSent + 1}:`, err)
+      client.close()
+      return
+    }
+
+    packetsSent++
+    lastPacketTime = now
+
+    // Schedule next packet
+    setTimeout(sendNextPacket, PACKET_DELAY_MS)
+  })
+}
+
+// Try to ping the server first using DNS lookup
+const dns = require('dns')
+dns.lookup(SERVER_IP, (err, address) => {
+  if (err) {
+    console.error('DNS lookup failed:', err)
+    client.close()
+    return
+  }
+
+  console.log(`DNS resolution successful: ${address}`)
+  console.log('Starting packet transmission...\n')
+  sendNextPacket()
 })
