@@ -400,7 +400,7 @@ async function handleBase64Audio(audioUrl, socket) {
       adjustedBuffer.writeInt16LE(sample, index * 2)
     })
 
-    const maxSize = 480000
+    const maxSize = 1920000 // Increased to ~4x the original size (about 60 seconds at 16kHz)
     const audioData = adjustedBuffer.slice(
       0,
       Math.min(adjustedBuffer.length, maxSize)
@@ -427,11 +427,16 @@ async function handleStreamingAudio(audioUrl, socket) {
       method: 'get',
       url: audioUrl,
       responseType: 'stream',
+      maxContentLength: Infinity, // Allow for larger audio files
+      timeout: 30000, // 30 second timeout
     })
 
     console.log('Streaming audio to client...')
     setupStreamHandlers(audioResponse.data, socket)
-    audioResponse.data.pipe(socket)
+
+    // Use a larger internal buffer for streaming
+    const streamOpts = { highWaterMark: 32768 } // 32KB buffer
+    audioResponse.data.pipe(socket, streamOpts)
   } catch (error) {
     console.error('Error fetching audio stream:', error)
     socket.write(JSON.stringify({ error: 'Error fetching audio' }) + '\n')
