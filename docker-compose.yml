@@ -1,14 +1,8 @@
 services:
-  vban-server:
+  tico-vban-server:
     build: .
-    network_mode: "host"  # Use host networking
-    privileged: true      # Give extended privileges to container
-    cap_add:             # Add specific capabilities
-      - NET_ADMIN
-      - NET_RAW
+    network_mode: "host"
     environment:
       - VF_DM_API_KEY=${VF_DM_API_KEY}
       - WHISPER_SERVER_URL=${WHISPER_SERVER_URL}
-      - UDP_PORT=6980
-      - TCP_PORT=12345
     restart: unless-stopped
