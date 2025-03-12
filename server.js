@@ -63,23 +63,35 @@ udpServer.on('message', (msg, rinfo) => {
 
   lastBufferClearTime = Date.now() // Update last activity time
 
-  // Assume VBAN packet: first 28 bytes = header, rest = PCM payload
-  const headerSize = 28
-  if (msg.length > headerSize) {
-    let payload = msg.slice(headerSize)
-    audioBuffer = Buffer.concat([audioBuffer, payload])
-    console.log(
-      `[UDP] Processed VBAN packet, buffer size now: ${audioBuffer.length} bytes`
-    )
-  } else {
-    console.log(
-      `[UDP] Packet too small for VBAN (${msg.length} < ${headerSize} bytes)`
-    )
+  // Try to detect packet type
+  if (msg.length >= 28 && msg.slice(0, 4).toString() === 'VBAN') {
+    // VBAN packet processing
     try {
-      console.log(`[UDP] Raw data: "${msg.toString()}"`)
+      const sampleRate = msg.readUInt32LE(4)
+      const samplesPerFrame = msg.readUInt8(8)
+      const channels = msg.readUInt8(9)
+      const dataFormat = msg.readUInt8(10)
+      const streamName = msg.slice(16, 24).toString().replace(/\0/g, '')
+
+      console.log('[UDP] VBAN packet detected:')
+      console.log(`  Sample Rate: ${sampleRate}Hz`)
+      console.log(`  Samples/Frame: ${samplesPerFrame}`)
+      console.log(`  Channels: ${channels}`)
+      console.log(`  Stream: "${streamName}"`)
+
+      const payload = msg.slice(28)
+      audioBuffer = Buffer.concat([audioBuffer, payload])
+      console.log(
+        `[UDP] Processed VBAN packet, buffer size: ${audioBuffer.length} bytes`
+      )
     } catch (e) {
-      console.log(`[UDP] Could not convert to string: ${e.message}`)
+      console.error('[UDP] Error processing VBAN header:', e)
     }
+  } else {
+    // Treat as raw audio data
+    console.log('[UDP] Processing as raw audio data')
+    audioBuffer = Buffer.concat([audioBuffer, msg])
+    console.log(`[UDP] Buffer size after raw data: ${audioBuffer.length} bytes`)
   }
 })
 
