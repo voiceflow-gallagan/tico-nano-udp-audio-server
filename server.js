@@ -25,6 +25,25 @@ if (!VF_DM_API_KEY || !WHISPER_SERVER_URL) {
 // Global Buffer for Audio Data
 // ---------------------------
 let audioBuffer = Buffer.alloc(0)
+let lastBufferSize = 0
+let lastBufferClearTime = Date.now()
+
+// Add periodic buffer status check and cleanup
+setInterval(() => {
+  const now = Date.now()
+  if (audioBuffer.length !== lastBufferSize) {
+    console.log(`Buffer status: ${audioBuffer.length} bytes`)
+    lastBufferSize = audioBuffer.length
+  }
+
+  // Clear buffer if it hasn't been used in 5 minutes
+  if (now - lastBufferClearTime > 5 * 60 * 1000) {
+    console.log('Clearing stale audio buffer')
+    audioBuffer = Buffer.alloc(0)
+    lastBufferSize = 0
+    lastBufferClearTime = now
+  }
+}, 5000)
 
 // ---------------------------
 // UDP Server (VBAN Receiver)
@@ -38,30 +57,46 @@ udpServer.on('error', (err) => {
 })
 
 udpServer.on('message', (msg, rinfo) => {
+  lastBufferClearTime = Date.now() // Update last activity time
   // Assume VBAN packet: first 28 bytes = header, rest = PCM payload
   const headerSize = 28
   if (msg.length > headerSize) {
     let payload = msg.slice(headerSize)
     audioBuffer = Buffer.concat([audioBuffer, payload])
+    console.log(
+      `Received UDP packet from ${rinfo.address}:${rinfo.port}, buffer size now: ${audioBuffer.length}`
+    )
   }
 })
 
 udpServer.on('listening', () => {
   const address = udpServer.address()
   console.log(`VBAN UDP server listening on ${address.address}:${address.port}`)
+  console.log(
+    'Make sure your VBAN source (VoiceMeeter) is configured to stream to this address and port'
+  )
 })
 
-udpServer.bind(udpPort)
+udpServer.bind(udpPort, '0.0.0.0') // Explicitly bind to all interfaces
 
 // TCP Server (Transcription Request and Audio Streaming)
 const tcpPort = TCP_PORT // Use environment variable
 const tcpServer = net.createServer((socket) => {
-  console.log('TCP client connected for transcription/audio streaming.')
+  const clientAddress = socket.remoteAddress
+  const clientPort = socket.remotePort
+  console.log(`TCP client connected from ${clientAddress}:${clientPort}`)
 
   // Add buffer size check
   if (audioBuffer.length === 0) {
-    console.error('Empty audio buffer received')
-    socket.write(JSON.stringify({ error: 'No audio data received' }) + '\n')
+    console.error(
+      `Empty audio buffer received for client ${clientAddress}:${clientPort}`
+    )
+    socket.write(
+      JSON.stringify({
+        error:
+          'No audio data received. Make sure VBAN is streaming to UDP port 6980 first.',
+      }) + '\n'
+    )
     socket.end()
     return
   }
