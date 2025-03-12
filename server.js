@@ -88,9 +88,22 @@ udpServer.on('message', (msg, rinfo) => {
       console.error('[UDP] Error processing VBAN header:', e)
     }
   } else {
-    // Treat as raw audio data
+    // Process as raw 16-bit PCM audio data from M5Stack (16kHz, mono)
     console.log('[UDP] Processing as raw audio data')
-    audioBuffer = Buffer.concat([audioBuffer, msg])
+
+    // Convert from Int16 to proper PCM samples
+    const samples = new Int16Array(msg.buffer, msg.byteOffset, msg.length / 2)
+    const processedData = Buffer.alloc(msg.length)
+
+    // Process each sample (optional gain adjustment)
+    for (let i = 0; i < samples.length; i++) {
+      // Apply gain boost and ensure we don't clip
+      const gain = 2.0 // Adjust this value to boost audio level
+      const sample = Math.max(-32768, Math.min(32767, samples[i] * gain))
+      processedData.writeInt16LE(sample, i * 2)
+    }
+
+    audioBuffer = Buffer.concat([audioBuffer, processedData])
     console.log(`[UDP] Buffer size after raw data: ${audioBuffer.length} bytes`)
   }
 })
@@ -322,27 +335,34 @@ tcpServer.listen(tcpPort, () => {
 // Function: Add WAV Header
 // ---------------------------
 function addWavHeader(pcmData) {
-  // Assumptions: 16-bit, mono, 16kHz PCM data
-  const numChannels = 1
-  const sampleRate = 16000
+  const numChannels = 1 // Mono
+  const sampleRate = 16000 // 16kHz
   const bitsPerSample = 16
   const byteRate = (sampleRate * numChannels * bitsPerSample) / 8
   const blockAlign = (numChannels * bitsPerSample) / 8
+  const subChunk2Size = pcmData.length
+  const chunkSize = 36 + subChunk2Size
+
   const header = Buffer.alloc(44)
 
-  header.write('RIFF', 0) // ChunkID
-  header.writeUInt32LE(36 + pcmData.length, 4) // ChunkSize
-  header.write('WAVE', 8) // Format
-  header.write('fmt ', 12) // Subchunk1ID
+  // RIFF header
+  header.write('RIFF', 0)
+  header.writeUInt32LE(chunkSize, 4)
+  header.write('WAVE', 8)
+
+  // fmt chunk
+  header.write('fmt ', 12)
   header.writeUInt32LE(16, 16) // Subchunk1Size (16 for PCM)
-  header.writeUInt16LE(1, 20) // AudioFormat (1 = PCM)
-  header.writeUInt16LE(numChannels, 22) // NumChannels
-  header.writeUInt32LE(sampleRate, 24) // SampleRate
-  header.writeUInt32LE(byteRate, 28) // ByteRate
-  header.writeUInt16LE(blockAlign, 32) // BlockAlign
-  header.writeUInt16LE(bitsPerSample, 34) // BitsPerSample
-  header.write('data', 36) // Subchunk2ID
-  header.writeUInt32LE(pcmData.length, 40) // Subchunk2Size
+  header.writeUInt16LE(1, 20) // AudioFormat (1 for PCM)
+  header.writeUInt16LE(numChannels, 22)
+  header.writeUInt32LE(sampleRate, 24)
+  header.writeUInt32LE(byteRate, 28)
+  header.writeUInt16LE(blockAlign, 32)
+  header.writeUInt16LE(bitsPerSample, 34)
+
+  // data chunk
+  header.write('data', 36)
+  header.writeUInt32LE(subChunk2Size, 40)
 
   return Buffer.concat([header, pcmData])
 }
