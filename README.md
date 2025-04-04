@@ -18,7 +18,13 @@ A Node.js server that receives raw PCM audio data over UDP, processes it through
 
 ## Environment Variables
 
-Create a `.env` file with:
+The project includes a `.env.template` file that you can use as a starting point. Copy it to create your own `.env` file:
+
+```bash
+cp .env.template .env
+```
+
+Then edit the `.env` file with your specific values:
 
 ```env
 # Voiceflow API Key
@@ -32,6 +38,7 @@ TCP_PORT=12345 # Optional, defaults to 12345
 WHISPER_MODEL=base
 WHISPER_ENGINE=openai_whisper
 WHISPER_DEVICE=cpu
+WHISPER_VAD_FILTER=false
 ```
 
 ### Whisper ASR Configuration Options
@@ -67,6 +74,16 @@ WHISPER_DEVICE=cpu
 - `cpu`: Run on CPU (default)
 - `cuda`: Run on GPU (requires NVIDIA GPU with CUDA support)
 
+#### Voice Activity Detection (VAD)
+
+- `WHISPER_VAD_FILTER=true`: Enable VAD filtering to remove non-speech segments with Faster Whisper engine
+- `WHISPER_VAD_FILTER=false`: Disable VAD filtering (default)
+
+VAD filtering helps improve transcription accuracy by removing background noise and silence. It's particularly useful for:
+- Reducing false positives in transcription
+- Improving processing speed by focusing only on speech segments
+- Enhancing the quality of transcriptions in noisy environments
+
 ## Installation
 
 1. Clone the repository:
@@ -78,6 +95,12 @@ cd tico-nano-udp-audio-server
 2. Install dependencies:
 ```bash
 npm install
+```
+
+3. Set up your environment variables:
+```bash
+cp .env.template .env
+# Edit .env with your specific values
 ```
 
 ## Running
@@ -120,6 +143,7 @@ The project includes an integrated Whisper ASR service using the [openai-whisper
 - For better performance, use the `faster_whisper` engine
 - For production use with English content, consider `distil-medium.en` with `faster_whisper`
 - For multi-language support, use standard models like `medium` or `large-v3`
+- Enable VAD filtering to improve transcription quality and reduce processing time
 
 ## License
 

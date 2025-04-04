@@ -6,6 +6,7 @@ services:
       - "${TCP_PORT}:12345/tcp"
     environment:
       - VF_DM_API_KEY=${VF_DM_API_KEY}
+      - WHISPER_VAD_FILTER=${WHISPER_VAD_FILTER:-false}
       - WHISPER_SERVER_URL=http://whisper-asr:9000
       - UDP_PORT=6980
       - TCP_PORT=12345
@@ -22,7 +23,6 @@ services:
 
   whisper-asr:
     image: onerahmet/openai-whisper-asr-webservice:latest
-    # No need to expose ports to the host since it's only used internally
     expose:
       - "9000"
     environment:

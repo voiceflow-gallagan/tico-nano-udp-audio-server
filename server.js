@@ -14,6 +14,7 @@ const WHISPER_SERVER_URL =
   process.env.WHISPER_SERVER_URL || 'http://whisper-asr:9000'
 const UDP_PORT = parseInt(process.env.UDP_PORT || '6980')
 const TCP_PORT = parseInt(process.env.TCP_PORT || '12345')
+const WHISPER_VAD_FILTER = process.env.WHISPER_VAD_FILTER || 'false'
 
 if (!VF_DM_API_KEY) {
   console.error(
@@ -278,7 +279,7 @@ async function transcribeAudio(audioBuffer) {
 
   try {
     const response = await axios.post(
-      `${WHISPER_SERVER_URL}/asr?encode=false&vad_filter=true&task=transcribe&output=json&initial_prompt=You%20analyze%20a%20conversation%20beetween%20Voiceflow%20teamates.%20Here%20is%20a%20list%20of%20possible%20names%3A%20NiKo%2C%20Nina%2C%20Henry%2C%20Daniel%2C%20Yuksel.`,
+      `${WHISPER_SERVER_URL}/asr?task=transcribe&language=en&encode=false&vad_filter=${WHISPER_VAD_FILTER}&task=transcribe&output=json`,
       form,
       {
         headers: {
