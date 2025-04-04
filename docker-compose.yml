@@ -30,5 +30,9 @@ services:
       - ASR_ENGINE=openai_whisper
       - ASR_DEVICE=cpu
     volumes:
-      - ./cache:/root/.cache/
+      - whisper-cache:/root/.cache/
     restart: unless-stopped
+
+volumes:
+  whisper-cache:
+    name: whisper-cache
