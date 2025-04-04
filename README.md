@@ -6,7 +6,7 @@ A Node.js server that receives raw PCM audio data over UDP, processes it through
 
 - Receives 16-bit PCM audio data over UDP (port 6980)
 - Processes audio with noise gate and gain adjustment
-- Transcribes audio using Whisper ASR
+- Transcribes audio using integrated Whisper ASR service
 - Generates responses using Voiceflow Dialog Manager
 - Returns TTS audio responses to clients
 
@@ -22,7 +22,6 @@ Create a `.env` file with:
 
 ```env
 VF_DM_API_KEY=your_voiceflow_api_key
-WHISPER_SERVER_URL=your_whisper_server_url
 UDP_PORT=6980  # Optional, defaults to 6980
 TCP_PORT=12345 # Optional, defaults to 12345
 ```
@@ -59,8 +58,20 @@ docker compose up -d
 - UDP Server (Port 6980): Receives raw PCM audio data
 - TCP Server (Port 12345): Handles client connections for responses
 - Audio Processing: Noise gate, gain adjustment, and WAV formatting
-- API Integration: Whisper ASR and Voiceflow Dialog Manager
+- Whisper ASR Service: Integrated transcription service running on port 9000
+- API Integration: Voiceflow Dialog Manager
 - Audio Response: MP3 decoding and PCM streaming
+
+## Whisper ASR Service
+
+The project includes an integrated Whisper ASR service using the [openai-whisper-asr-webservice](https://github.com/ahmetoner/whisper-asr-webservice) Docker image. The service is configured to:
+
+- Use the base model
+- Run on CPU
+- Cache models to improve startup time
+- Support multiple output formats (text, JSON, VTT, SRT, TSV)
+- Provide word-level timestamps
+- Filter out non-speech audio with voice activity detection (VAD)
 
 ## License
 

@@ -4,6 +4,7 @@ npm-debug.log
 yarn-debug.log
 yarn-error.log
 
+cache/*
 # Environment variables
 .env
 .env.local

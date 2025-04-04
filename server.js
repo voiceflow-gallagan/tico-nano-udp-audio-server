@@ -10,16 +10,21 @@ require('dotenv').config()
 
 // Environment Variables
 const VF_DM_API_KEY = process.env.VF_DM_API_KEY
-const WHISPER_SERVER_URL = process.env.WHISPER_SERVER_URL
+const WHISPER_SERVER_URL =
+  process.env.WHISPER_SERVER_URL || 'http://whisper-asr:9000'
 const UDP_PORT = parseInt(process.env.UDP_PORT || '6980')
 const TCP_PORT = parseInt(process.env.TCP_PORT || '12345')
 
-if (!VF_DM_API_KEY || !WHISPER_SERVER_URL) {
+if (!VF_DM_API_KEY) {
   console.error(
-    'Missing required environment variables. Please check your .env file.'
+    'Missing required environment variable VF_DM_API_KEY. Please check your .env file.'
   )
   process.exit(1)
 }
+
+console.log(`Using Whisper ASR service at: ${WHISPER_SERVER_URL}`)
+console.log(`UDP server will listen on port: ${UDP_PORT}`)
+console.log(`TCP server will listen on port: ${TCP_PORT}`)
 
 // ---------------------------
 // Global Buffer for Audio Data
