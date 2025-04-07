@@ -39,6 +39,7 @@ WHISPER_MODEL=base
 WHISPER_ENGINE=openai_whisper
 WHISPER_DEVICE=cpu
 WHISPER_VAD_FILTER=false
+INCLUDE_TEXT_WITH_AUDIO=true # Optional, defaults to false. Set to true to send audio with the preceding text message. (Core2 with screen)
 ```
 
 ### Whisper ASR Configuration Options

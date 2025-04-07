@@ -14,6 +14,7 @@ const WHISPER_SERVER_URL =
   process.env.WHISPER_SERVER_URL || 'http://whisper-asr:9000'
 const UDP_PORT = parseInt(process.env.UDP_PORT || '6980')
 const TCP_PORT = parseInt(process.env.TCP_PORT || '12345')
+const INCLUDE_TEXT_WITH_AUDIO = process.env.INCLUDE_TEXT_WITH_AUDIO !== 'false'
 const WHISPER_VAD_FILTER = process.env.WHISPER_VAD_FILTER || 'false'
 
 if (!VF_DM_API_KEY) {
@@ -26,6 +27,7 @@ if (!VF_DM_API_KEY) {
 console.log(`Using Whisper ASR service at: ${WHISPER_SERVER_URL}`)
 console.log(`UDP server will listen on port: ${UDP_PORT}`)
 console.log(`TCP server will listen on port: ${TCP_PORT}`)
+console.log(`Include text with audio: ${INCLUDE_TEXT_WITH_AUDIO}`)
 
 // ---------------------------
 // Global Buffer for Audio Data
@@ -163,12 +165,14 @@ const tcpServer = net.createServer((socket) => {
         console.log('Voiceflow response received.')
 
         const audioUrl = voiceflowResponse.audioUri
+        const textMessage =
+          voiceflowResponse.message || 'No text response available'
         console.log('Processing audio')
 
         if (audioUrl.startsWith('data:audio/mp3;base64,')) {
-          await handleBase64Audio(audioUrl, socket)
+          await handleBase64Audio(audioUrl, socket, textMessage)
         } else {
-          await handleStreamingAudio(audioUrl, socket)
+          await handleStreamingAudio(audioUrl, socket, textMessage)
         }
       } catch (error) {
         console.error('Error processing Voiceflow response:', error)
@@ -279,7 +283,7 @@ async function transcribeAudio(audioBuffer) {
 
   try {
     const response = await axios.post(
-      `${WHISPER_SERVER_URL}/asr?task=transcribe&language=en&encode=false&vad_filter=${WHISPER_VAD_FILTER}&task=transcribe&output=json`,
+      `${WHISPER_SERVER_URL}/asr?task=transcribe&language=en&encode=false&vad_filter=${WHISPER_VAD_FILTER}&output=json`,
       form,
       {
         headers: {
@@ -322,7 +326,7 @@ async function transcribeAudio(audioBuffer) {
 async function getVoiceflowResponse(transcribedText) {
   try {
     const response = await axios.post(
-      'https://general-runtime.voiceflow.com/state/user/niko/interact',
+      'https://general-runtime.voiceflow.com/state/user/nano/interact',
       {
         action: {
           type: 'event',
@@ -352,7 +356,6 @@ async function getVoiceflowResponse(transcribedText) {
     if (!responseData) {
       throw new Error('No payload in Voiceflow response')
     }
-    console.log(responseData.message)
     return {
       message: responseData.message || '',
       audioUri: responseData.audio?.src || '',
@@ -366,8 +369,18 @@ async function getVoiceflowResponse(transcribedText) {
 // ---------------------------
 // Audio Response Handlers
 // ---------------------------
-async function handleBase64Audio(audioUrl, socket) {
+async function handleBase64Audio(audioUrl, socket, message) {
   try {
+    // Send the text message first if INCLUDE_TEXT_WITH_AUDIO is true
+    if (INCLUDE_TEXT_WITH_AUDIO) {
+      const messagePacket =
+        JSON.stringify({
+          type: 'text',
+          message: message,
+        }) + '\n'
+      socket.write(messagePacket)
+    }
+
     const mp3Buffer = dataUriToBuffer(audioUrl)
     const decoder = new Lame({
       output: 'buffer',
@@ -386,20 +399,39 @@ async function handleBase64Audio(audioUrl, socket) {
 
     // Convert to 16-bit samples
     const samples = []
+    // Assuming the decoded buffer is 44.1kHz, 16-bit mono based on typical MP3s
+    const inputSampleRate = 44100
+    const outputSampleRate = 16000
     for (let i = 0; i < pcmBuffer.length; i += 2) {
       samples.push(pcmBuffer.readInt16LE(i))
     }
 
-    // Downsample with interpolation
+    // Downsample to 16kHz using linear interpolation
     const adjustedSamples = []
-    const ratio = 3 // 44.1kHz to ~14.7kHz
+    const ratio = inputSampleRate / outputSampleRate // Should be ~2.75625
+    const outputLength = Math.floor(samples.length / ratio)
 
-    for (let i = 0; i < samples.length - ratio; i += ratio) {
-      const sample = Math.round(
-        (samples[i] + samples[Math.min(i + 1, samples.length - 1)]) / 2
+    for (let i = 0; i < outputLength; i++) {
+      const inputIndex = i * ratio
+      const indexBefore = Math.floor(inputIndex)
+      const indexAfter = Math.min(indexBefore + 1, samples.length - 1) // Ensure we don't go out of bounds
+      const fraction = inputIndex - indexBefore
+
+      const sampleBefore = samples[indexBefore]
+      const sampleAfter = samples[indexAfter]
+
+      // Linear interpolation
+      const interpolatedSample = Math.round(
+        sampleBefore * (1 - fraction) + sampleAfter * fraction
       )
-      adjustedSamples.push(sample)
+      adjustedSamples.push(
+        Math.max(-32768, Math.min(32767, interpolatedSample)) // Clamp to 16-bit range
+      )
     }
+
+    console.log(
+      `Resampled audio from ${samples.length} samples (${inputSampleRate}Hz) to ${adjustedSamples.length} samples (${outputSampleRate}Hz)`
+    )
 
     const adjustedBuffer = Buffer.alloc(adjustedSamples.length * 2)
     adjustedSamples.forEach((sample, index) => {
@@ -411,6 +443,11 @@ async function handleBase64Audio(audioUrl, socket) {
       0,
       Math.min(adjustedBuffer.length, maxSize)
     )
+
+    // Add a small delay to ensure the text message is processed first
+    if (INCLUDE_TEXT_WITH_AUDIO) {
+      await new Promise((resolve) => setTimeout(resolve, 500))
+    }
 
     const pcmStream = new Readable()
     pcmStream.push(audioData)
@@ -427,8 +464,18 @@ async function handleBase64Audio(audioUrl, socket) {
   }
 }
 
-async function handleStreamingAudio(audioUrl, socket) {
+async function handleStreamingAudio(audioUrl, socket, message) {
   try {
+    // Send the text message first if INCLUDE_TEXT_WITH_AUDIO is true
+    if (INCLUDE_TEXT_WITH_AUDIO) {
+      const messagePacket =
+        JSON.stringify({
+          type: 'text',
+          message: message,
+        }) + '\n'
+      socket.write(messagePacket)
+    }
+
     const audioResponse = await axios({
       method: 'get',
       url: audioUrl,
