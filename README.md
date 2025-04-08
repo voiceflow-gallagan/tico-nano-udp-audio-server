@@ -34,7 +34,18 @@ VF_DM_API_KEY=your_voiceflow_api_key
 UDP_PORT=6980  # Optional, defaults to 6980
 TCP_PORT=12345 # Optional, defaults to 12345
 
-# Whisper ASR Settings
+# Groq Cloud Whisper API (Optional)
+# Set USE_GROQ to true to use Groq's faster Whisper API instead of the local one.
+# Requires a GROQ_API_KEY.
+USE_GROQ=false
+GROQ_API_KEY=your_groq_api_key
+# Optional Groq Settings:
+GROQ_API_URL=https://api.groq.com/openai/v1/audio/transcriptions
+GROQ_MODEL=whisper-large-v3-turbo # Model ID (see options below)
+# GROQ_LANGUAGE=en # Optional: Specify source language (ISO-639-1) for potentially better accuracy. Leave unset for multilingual detection.
+
+# Local Whisper ASR Service Settings (Used if USE_GROQ is false)
+WHISPER_SERVER_URL=http://whisper-asr:9000 # Optional, defaults to http://whisper-asr:9000
 WHISPER_MODEL=base
 WHISPER_ENGINE=openai_whisper
 WHISPER_DEVICE=cpu
@@ -85,6 +96,28 @@ VAD filtering helps improve transcription accuracy by removing background noise 
 - Improving processing speed by focusing only on speech segments
 - Enhancing the quality of transcriptions in noisy environments
 
+### Groq Cloud Whisper API
+
+If you prefer to use Groq's cloud-based Whisper API (which can be significantly faster, especially without a GPU), you can enable it by setting the following environment variables:
+
+- `USE_GROQ=true`: Enables the Groq API for transcription.
+- `GROQ_API_KEY`: Your API key obtained from [console.groq.com](https://console.groq.com/).
+
+When `USE_GROQ` is set to `true`, the following optional variables can also be set:
+
+- `GROQ_API_URL`: The specific Groq API endpoint. Defaults to the transcription endpoint `https://api.groq.com/openai/v1/audio/transcriptions`.
+- `GROQ_MODEL`: The Whisper model ID to use. Defaults to `whisper-large-v3-turbo`. Available options:
+    - `whisper-large-v3`: Best accuracy, multilingual transcription & translation.
+    - `whisper-large-v3-turbo`: Good speed/cost balance, multilingual transcription (no translation).
+    - `distil-whisper-large-v3-en`: Fastest, lowest cost, English-only transcription (no translation).
+- `GROQ_LANGUAGE`: (Optional) The ISO-639-1 code (e.g., `en`, `fr`, `es`) of the *input* audio language. Specifying this can improve accuracy and latency. If omitted, Groq will auto-detect the language (multilingual).
+
+When `USE_GROQ` is set to `true`, the local Whisper ASR service settings (`WHISPER_SERVER_URL`, `WHISPER_MODEL`, `WHISPER_ENGINE`, `WHISPER_DEVICE`) are ignored for transcription.
+
+### Local Whisper ASR Configuration Options
+
+These options are used when `USE_GROQ` is set to `false` and you are running the local Whisper service using the `local-whisper` profile (`docker compose --profile local-whisper up -d`).
+
 ## Installation
 
 1. Clone the repository:
@@ -106,17 +139,50 @@ cp .env.template .env
 
 ## Running
 
-### Local Development
+### Docker Deployment (Recommended)
+
+Docker Compose is used to manage the application and its potential dependency on a local Whisper ASR service.
+
+**Option 1: Using Groq API for Transcription (Default / Recommended for Speed)**
+
+Ensure `USE_GROQ=true` and `GROQ_API_KEY=your_key` are set in your `.env` file.
 
 ```bash
-node server.js
-```
-
-### Docker Deployment
-
-```bash
+# This command only starts the main server, relying on Groq.
 docker compose up -d
 ```
+
+**Option 2: Using Local Whisper ASR Service**
+
+Ensure `USE_GROQ=false` is set in your `.env` file and configure the `WHISPER_*` variables as needed.
+
+```bash
+# This command starts the main server AND the local whisper-asr service by activating the profile.
+docker compose --profile local-whisper up -d
+```
+
+To stop the services:
+
+```bash
+# Stop services started without the profile
+docker compose down
+
+# Stop services started WITH the profile
+docker compose --profile local-whisper down
+```
+
+### Local Development (Without Docker)
+
+If you want to run the server directly using Node.js (e.g., for debugging) and connect to a *separate* Whisper ASR instance (like the one running in Docker, or another remote one):
+
+1. Ensure your desired Whisper ASR service is running and accessible.
+2. Set `USE_GROQ=false` in your `.env` file.
+3. Configure `WHISPER_SERVER_URL` in `.env` to point to your running Whisper instance (e.g., `http://localhost:9000` if using the Docker container).
+4. Run the server:
+   ```bash
+   npm install
+   node server.js
+   ```
 
 ## Architecture
 

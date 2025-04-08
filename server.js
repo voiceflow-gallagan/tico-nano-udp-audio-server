@@ -1,12 +1,13 @@
 'use strict'
 
-const dgram = require('dgram')
-const net = require('net')
-const axios = require('axios')
-const FormData = require('form-data')
-const { Lame } = require('node-lame')
-const { Readable } = require('stream')
-require('dotenv').config()
+import dgram from 'dgram'
+import net from 'net'
+import axios from 'axios'
+import FormData from 'form-data'
+import { Lame } from 'node-lame'
+import { Readable } from 'stream'
+import 'dotenv/config'
+import fs from 'fs'
 
 // Environment Variables
 const VF_DM_API_KEY = process.env.VF_DM_API_KEY
@@ -16,6 +17,15 @@ const UDP_PORT = parseInt(process.env.UDP_PORT || '6980')
 const TCP_PORT = parseInt(process.env.TCP_PORT || '12345')
 const INCLUDE_TEXT_WITH_AUDIO = process.env.INCLUDE_TEXT_WITH_AUDIO !== 'false'
 const WHISPER_VAD_FILTER = process.env.WHISPER_VAD_FILTER || 'false'
+const GROQ_API_KEY = process.env.GROQ_API_KEY
+const USE_GROQ = process.env.USE_GROQ === 'true'
+
+// Groq specific settings (used if USE_GROQ is true)
+const GROQ_API_URL =
+  process.env.GROQ_API_URL ||
+  'https://api.groq.com/openai/v1/audio/transcriptions'
+const GROQ_MODEL = process.env.GROQ_MODEL || 'whisper-large-v3-turbo'
+const GROQ_LANGUAGE = process.env.GROQ_LANGUAGE // Optional, ISO-639-1 code (e.g., 'en', 'fr')
 
 if (!VF_DM_API_KEY) {
   console.error(
@@ -24,7 +34,25 @@ if (!VF_DM_API_KEY) {
   process.exit(1)
 }
 
-console.log(`Using Whisper ASR service at: ${WHISPER_SERVER_URL}`)
+if (USE_GROQ) {
+  if (!GROQ_API_KEY) {
+    console.error(
+      'USE_GROQ is true, but GROQ_API_KEY is missing. Please check your .env file.'
+    )
+    process.exit(1)
+  }
+  console.log('Using Groq for transcription.')
+  console.log(` Groq API URL: ${GROQ_API_URL}`)
+  console.log(` Groq Model: ${GROQ_MODEL}`)
+  if (GROQ_LANGUAGE) {
+    console.log(` Groq Language: ${GROQ_LANGUAGE}`)
+  } else {
+    console.log(` Groq Language: Not specified (multilingual detection)`)
+  }
+} else {
+  console.log(`Using local Whisper ASR service at: ${WHISPER_SERVER_URL}`)
+}
+
 console.log(`UDP server will listen on port: ${UDP_PORT}`)
 console.log(`TCP server will listen on port: ${TCP_PORT}`)
 console.log(`Include text with audio: ${INCLUDE_TEXT_WITH_AUDIO}`)
@@ -121,6 +149,7 @@ const tcpServer = net.createServer((socket) => {
     clientAddress = clientAddress.substring(7)
   }
   const clientPort = socket.remotePort
+  let clientConfig = { includeText: INCLUDE_TEXT_WITH_AUDIO } // Default to env variable
 
   console.log(`[TCP] Client connected from ${clientAddress}:${clientPort}`)
   console.log(`[TCP] Current audio buffer size: ${audioBuffer.length} bytes`)
@@ -151,47 +180,94 @@ const tcpServer = net.createServer((socket) => {
     return
   }
 
-  const wavBuffer = addWavHeader(audioBuffer)
-  console.log(
-    `Sending ${wavBuffer.length} bytes of audio data for transcription`
-  )
+  // Set up a one-time data handler to catch client config
+  socket.once('data', (data) => {
+    try {
+      // Try to parse as JSON first
+      const jsonData = JSON.parse(data.toString().trim())
+      if (typeof jsonData === 'object') {
+        console.log('[TCP] Received client configuration:', jsonData)
 
-  transcribeAudio(wavBuffer)
-    .then(async (transcription) => {
-      console.log('Transcription received:', transcription)
-
-      try {
-        const voiceflowResponse = await getVoiceflowResponse(transcription)
-        console.log('Voiceflow response received.')
-
-        const audioUrl = voiceflowResponse.audioUri
-        const textMessage =
-          voiceflowResponse.message || 'No text response available'
-        console.log('Processing audio')
-
-        if (audioUrl.startsWith('data:audio/mp3;base64,')) {
-          await handleBase64Audio(audioUrl, socket, textMessage)
-        } else {
-          await handleStreamingAudio(audioUrl, socket, textMessage)
+        // Extract includeText from client config if present
+        if (jsonData.hasOwnProperty('includeText')) {
+          clientConfig.includeText = !!jsonData.includeText
+          console.log(
+            `[TCP] Client requested includeText: ${clientConfig.includeText}`
+          )
         }
-      } catch (error) {
-        console.error('Error processing Voiceflow response:', error)
+
+        // Process audio after receiving config
+        processAudioTranscription()
+      } else {
+        // If not valid JSON object, treat as audio data
+        console.log(
+          '[TCP] No valid JSON config received, using default settings'
+        )
+        processAudioTranscription()
+      }
+    } catch (e) {
+      // If not valid JSON, treat as audio data
+      console.log(
+        '[TCP] Failed to parse JSON config, using default settings:',
+        e.message
+      )
+      processAudioTranscription()
+    }
+  })
+
+  function processAudioTranscription() {
+    const wavBuffer = addWavHeader(audioBuffer)
+    console.log(
+      `Sending ${wavBuffer.length} bytes of audio data for transcription`
+    )
+
+    transcribeAudio(wavBuffer)
+      .then(async (transcription) => {
+        console.log('Transcription received:', transcription)
+
+        try {
+          const voiceflowResponse = await getVoiceflowResponse(transcription)
+          console.log('Voiceflow response received.')
+
+          const audioUrl = voiceflowResponse.audioUri
+          const textMessage =
+            voiceflowResponse.message || 'No text response available'
+          console.log('Processing audio')
+
+          if (audioUrl.startsWith('data:audio/mp3;base64,')) {
+            await handleBase64Audio(
+              audioUrl,
+              socket,
+              textMessage,
+              clientConfig.includeText
+            )
+          } else {
+            await handleStreamingAudio(
+              audioUrl,
+              socket,
+              textMessage,
+              clientConfig.includeText
+            )
+          }
+        } catch (error) {
+          console.error('Error processing Voiceflow response:', error)
+          socket.write(
+            JSON.stringify({ error: 'Error getting AI response' }) + '\n'
+          )
+          socket.end()
+        }
+
+        audioBuffer = Buffer.alloc(0)
+      })
+      .catch((error) => {
+        console.error('Error during transcription:', error)
         socket.write(
-          JSON.stringify({ error: 'Error getting AI response' }) + '\n'
+          JSON.stringify({ error: 'Error during transcription' }) + '\n'
         )
         socket.end()
-      }
-
-      audioBuffer = Buffer.alloc(0)
-    })
-    .catch((error) => {
-      console.error('Error during transcription:', error)
-      socket.write(
-        JSON.stringify({ error: 'Error during transcription' }) + '\n'
-      )
-      socket.end()
-      audioBuffer = Buffer.alloc(0)
-    })
+        audioBuffer = Buffer.alloc(0)
+      })
+  }
 })
 
 tcpServer.on('error', (err) => {
@@ -269,56 +345,141 @@ function validateAudioBuffer(buffer) {
 // ---------------------------
 // API Functions
 // ---------------------------
-async function transcribeAudio(audioBuffer) {
-  const form = new FormData()
-  const audioStream = new Readable()
-  audioStream.push(audioBuffer)
-  audioStream.push(null)
+async function transcribeAudio(audioWavBuffer) {
+  if (USE_GROQ) {
+    // --- Groq Transcription ---
+    try {
+      // 1. Encode WAV buffer to MP3 buffer using node-lame
+      console.log(
+        `Encoding ${audioWavBuffer.length} bytes WAV to MP3 for Groq...`
+      )
+      const encoder = new Lame({
+        output: 'buffer',
+        raw: true, // Input is raw PCM
+        sfreq: 16, // Input sample rate 16kHz
+        bitwidth: 16, // Input bitwidth 16
+        mode: 'm', // Input mode mono
+        // MP3 Output settings
+        abr: 32, // Average Bit Rate (e.g., 32 kbps - good for voice)
+        // quality: 5       // LAME quality preset (0-9, 0=best, 9=fastest)
+      }).setBuffer(audioWavBuffer)
 
-  form.append('audio_file', audioStream, {
-    filename: 'audio.wav',
-    contentType: 'audio/wav',
-    knownLength: audioBuffer.length,
-  })
+      await encoder.encode()
+      const mp3Buffer = encoder.getBuffer()
+      console.log(`Encoded MP3 size: ${mp3Buffer.length} bytes`)
 
-  try {
-    const response = await axios.post(
-      `${WHISPER_SERVER_URL}/asr?task=transcribe&language=en&encode=false&vad_filter=${WHISPER_VAD_FILTER}&output=json`,
-      form,
-      {
-        headers: {
-          ...form.getHeaders(),
-          accept: 'application/json',
-        },
-        maxContentLength: Infinity,
-        maxBodyLength: Infinity,
-      }
-    )
+      // 2. Send MP3 buffer to Groq using axios and FormData (proven to work)
+      console.log(`Sending ${mp3Buffer.length} bytes MP3 to Groq via axios...`)
+      const form = new FormData()
+      const mp3Stream = Readable.from(mp3Buffer)
 
-    if (!response.data) {
-      throw new Error('No response data received from ASR API')
-    }
-
-    if (response.data.text === '') {
-      console.log('No speech detected in the audio')
-      return 'I could not detect any speech in the audio. Could you please try speaking again?'
-    }
-
-    return response.data.text
-  } catch (error) {
-    if (error.response) {
-      console.error('ASR API Error Response:', {
-        status: error.response.status,
-        statusText: error.response.statusText,
-        data: error.response.data,
+      form.append('file', mp3Stream, {
+        filename: 'audio.mp3',
+        contentType: 'audio/mpeg',
+        knownLength: mp3Buffer.length,
       })
-      throw new Error('Failed to transcribe audio: Server error')
-    } else if (error.request) {
-      console.error('ASR API Request Error:', error.message)
-      throw new Error('Failed to transcribe audio: Network error')
-    } else {
-      console.error('ASR API Error:', error.message)
-      throw error
+      form.append('model', GROQ_MODEL)
+      if (GROQ_LANGUAGE) {
+        form.append('language', GROQ_LANGUAGE)
+      }
+
+      const response = await axios.post(GROQ_API_URL, form, {
+        headers: {
+          ...form.getHeaders(), // Sets Content-Type: multipart/form-data; boundary=...
+          Authorization: `Bearer ${GROQ_API_KEY}`,
+          Accept: 'application/json', // Optional, but good practice
+        },
+        maxContentLength: Infinity, // Allow large requests/responses
+        maxBodyLength: Infinity,
+      })
+
+      // Assuming the response structure is similar to OpenAI's Whisper API
+      if (!response.data || typeof response.data.text !== 'string') {
+        console.log(
+          'No transcription text found in Groq response:',
+          response.data
+        )
+        throw new Error('Invalid response structure from Groq API')
+      }
+
+      if (response.data.text === '') {
+        console.log('No speech detected in the audio by Groq')
+        return 'I could not detect any speech in the audio. Could you please try speaking again?'
+      }
+
+      console.log('Groq transcription successful via axios.')
+      return response.data.text
+    } catch (error) {
+      // Use the axios error logging structure
+      console.error('Error during Groq transcription (axios):', error.message)
+      if (error.response) {
+        console.error('Groq API Error Response (axios):', {
+          status: error.response.status,
+          statusText: error.response.statusText,
+          headers: error.response.headers,
+          data: error.response.data,
+        })
+      } else if (error.request) {
+        console.error('Groq API Request Error (axios): No response received')
+      }
+      throw new Error('Failed to transcribe audio using Groq')
+    }
+  } else {
+    // --- Local Whisper Transcription (Existing Logic) ---
+    console.log(
+      `Sending ${audioWavBuffer.length} bytes to local Whisper ASR...`
+    )
+    const form = new FormData()
+    const audioStream = new Readable()
+    audioStream.push(audioWavBuffer)
+    audioStream.push(null)
+
+    form.append('audio_file', audioStream, {
+      filename: 'audio.wav',
+      contentType: 'audio/wav',
+      knownLength: audioWavBuffer.length,
+    })
+
+    try {
+      const response = await axios.post(
+        // Note: Removed language=fr, encode=true from previous attempts, revert if needed
+        `${WHISPER_SERVER_URL}/asr?task=transcribe&encode=false&vad_filter=${WHISPER_VAD_FILTER}&output=json`,
+        form,
+        {
+          headers: {
+            ...form.getHeaders(),
+            accept: 'application/json',
+          },
+          maxContentLength: Infinity,
+          maxBodyLength: Infinity,
+        }
+      )
+
+      if (!response.data) {
+        throw new Error('No response data received from local ASR API')
+      }
+
+      if (response.data.text === '') {
+        console.log('No speech detected in the audio by local Whisper')
+        return 'I could not detect any speech in the audio. Could you please try speaking again?'
+      }
+
+      return response.data.text
+    } catch (error) {
+      if (error.response) {
+        console.error('Local ASR API Error Response:', {
+          status: error.response.status,
+          statusText: error.response.statusText,
+          data: error.response.data,
+        })
+        throw new Error('Failed to transcribe audio: Server error')
+      } else if (error.request) {
+        console.error('Local ASR API Request Error:', error.message)
+        throw new Error('Failed to transcribe audio: Network error')
+      } else {
+        console.error('Local ASR API Error:', error.message)
+        throw error
+      }
     }
   }
 }
@@ -326,16 +487,11 @@ async function transcribeAudio(audioBuffer) {
 async function getVoiceflowResponse(transcribedText) {
   try {
     const response = await axios.post(
-      'https://general-runtime.voiceflow.com/state/user/nano/interact',
+      'https://general-runtime.voiceflow.com/state/user/nano2025/interact',
       {
         action: {
-          type: 'event',
-          payload: {
-            event: {
-              name: 'question',
-              question: transcribedText,
-            },
-          },
+          type: 'text',
+          payload: transcribedText,
         },
         config: {
           tts: true,
@@ -352,10 +508,12 @@ async function getVoiceflowResponse(transcribedText) {
       }
     )
 
-    const responseData = response.data[2]?.payload
+    const responseData = response.data[0]?.payload
+
     if (!responseData) {
       throw new Error('No payload in Voiceflow response')
     }
+    console.log('Voiceflow message:', responseData.message)
     return {
       message: responseData.message || '',
       audioUri: responseData.audio?.src || '',
@@ -369,10 +527,10 @@ async function getVoiceflowResponse(transcribedText) {
 // ---------------------------
 // Audio Response Handlers
 // ---------------------------
-async function handleBase64Audio(audioUrl, socket, message) {
+async function handleBase64Audio(audioUrl, socket, message, includeText) {
   try {
-    // Send the text message first if INCLUDE_TEXT_WITH_AUDIO is true
-    if (INCLUDE_TEXT_WITH_AUDIO) {
+    // Send the text message first if includeText is true
+    if (includeText) {
       const messagePacket =
         JSON.stringify({
           type: 'text',
@@ -445,7 +603,7 @@ async function handleBase64Audio(audioUrl, socket, message) {
     )
 
     // Add a small delay to ensure the text message is processed first
-    if (INCLUDE_TEXT_WITH_AUDIO) {
+    if (includeText) {
       await new Promise((resolve) => setTimeout(resolve, 500))
     }
 
@@ -464,10 +622,10 @@ async function handleBase64Audio(audioUrl, socket, message) {
   }
 }
 
-async function handleStreamingAudio(audioUrl, socket, message) {
+async function handleStreamingAudio(audioUrl, socket, message, includeText) {
   try {
-    // Send the text message first if INCLUDE_TEXT_WITH_AUDIO is true
-    if (INCLUDE_TEXT_WITH_AUDIO) {
+    // Send the text message first if includeText is true
+    if (includeText) {
       const messagePacket =
         JSON.stringify({
           type: 'text',
@@ -481,7 +639,7 @@ async function handleStreamingAudio(audioUrl, socket, message) {
       url: audioUrl,
       responseType: 'stream',
       maxContentLength: Infinity, // Allow for larger audio files
-      timeout: 30000, // 30 second timeout
+      timeout: 60000, // 60 second timeout
     })
 
     console.log('Streaming audio to client...')
