@@ -106,11 +106,11 @@ If you prefer to use Groq's cloud-based Whisper API (which can be significantly 
 When `USE_GROQ` is set to `true`, the following optional variables can also be set:
 
 - `GROQ_API_URL`: The specific Groq API endpoint. Defaults to the transcription endpoint `https://api.groq.com/openai/v1/audio/transcriptions`.
-- `GROQ_MODEL`: The Whisper model ID to use. Defaults to `whisper-large-v3-turbo`. Available options:
+- `GROQ_WHISPER_MODEL`: The Whisper model ID to use. Defaults to `whisper-large-v3-turbo`. Available options:
     - `whisper-large-v3`: Best accuracy, multilingual transcription & translation.
     - `whisper-large-v3-turbo`: Good speed/cost balance, multilingual transcription (no translation).
     - `distil-whisper-large-v3-en`: Fastest, lowest cost, English-only transcription (no translation).
-- `GROQ_LANGUAGE`: (Optional) The ISO-639-1 code (e.g., `en`, `fr`, `es`) of the *input* audio language. Specifying this can improve accuracy and latency. If omitted, Groq will auto-detect the language (multilingual).
+- `GROQ_WHISPER_LANGUAGE`: (Optional) The ISO-639-1 code (e.g., `en`, `fr`, `es`) of the *input* audio language. Specifying this can improve accuracy and latency. If omitted, Groq will auto-detect the language (multilingual).
 
 When `USE_GROQ` is set to `true`, the local Whisper ASR service settings (`WHISPER_SERVER_URL`, `WHISPER_MODEL`, `WHISPER_ENGINE`, `WHISPER_DEVICE`) are ignored for transcription.
 

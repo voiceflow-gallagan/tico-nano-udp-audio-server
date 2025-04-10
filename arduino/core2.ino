@@ -9,9 +9,15 @@
 #include <WebServer.h>
 #include <ESPmDNS.h>
 #include <vector>
+#include <esp_sleep.h>
+#include <esp_pm.h>
 
 // Global web server (on port 80)
 WebServer server(80);
+
+// Sleep timeout in milliseconds
+#define SLEEP_TIMEOUT_MS 30000  // 30 second of inactivity before sleep
+unsigned long lastActivityTime = 0;
 
 ///////////////////////
 // Audio State Setup
@@ -53,6 +59,10 @@ AudioState currentState = IDLE;
 uint8_t* audioBuffer = NULL;
 int audioBufferOffset = 0;
 bool isRecording = false;
+#define AUDIO_PLAYBACK_BUFFER_SIZE (4096)
+uint8_t audioPlaybackBuffer[AUDIO_PLAYBACK_BUFFER_SIZE];
+int audioPlaybackBufferPos = 0;
+unsigned long lastAudioProcessTime = 0;
 
 String responseText = "";
 bool hasDisplayedText = false;
@@ -391,24 +401,87 @@ void setVolume(uint8_t volume) {
   M5.Axp.SetLDOVoltage(3, voltage);
 }
 
+void dumpBufferInfo(uint8_t* buffer, size_t len, const char* label) {
+  Serial.printf("%s: %d bytes, first 16 bytes: ", label, len);
+  for (int i = 0; i < min(16, (int)len); i++) {
+    Serial.printf("%02X ", buffer[i]);
+  }
+
+  // Show as ASCII if most bytes are printable
+  int printable = 0;
+  for (int i = 0; i < min(32, (int)len); i++) {
+    if (buffer[i] >= 32 && buffer[i] <= 126) printable++;
+  }
+
+  if (printable > 16) {
+    Serial.print(" ASCII: \"");
+    for (int i = 0; i < min(32, (int)len); i++) {
+      if (buffer[i] >= 32 && buffer[i] <= 126)
+        Serial.print((char)buffer[i]);
+      else
+        Serial.print('.');
+    }
+    Serial.println("\"");
+  } else {
+    Serial.println();
+  }
+}
+
+bool looksLikeWaveAudio(uint8_t* buffer, size_t len) {
+  // Check for common PCM audio patterns:
+  // 1. Not too many zero values in sequence
+  int zeroCount = 0;
+  int maxZeros = 0;
+
+  for (size_t i = 0; i < min(len, (size_t)128); i++) {
+    if (buffer[i] == 0) {
+      zeroCount++;
+    } else {
+      if (zeroCount > maxZeros) maxZeros = zeroCount;
+      zeroCount = 0;
+    }
+  }
+  if (zeroCount > maxZeros) maxZeros = zeroCount;
+
+  // 2. Not too many repeating patterns
+  int repeats = 0;
+  for (size_t i = 4; i < min(len, (size_t)128) - 4; i++) {
+    if (buffer[i] == buffer[i-4] && buffer[i+1] == buffer[i-3] &&
+        buffer[i+2] == buffer[i-2] && buffer[i+3] == buffer[i-1]) {
+      repeats++;
+    }
+  }
+
+  // Audio data shouldn't have too many zeros or repeating patterns
+  return (maxZeros < 12 && repeats < 15);
+}
+
 // Audio validation function
 bool isAudioData(uint8_t* buffer, size_t len) {
-  // Check if it's JSON (starts with '{')
+  // Quick check - if it starts with '{' it's definitely JSON, not audio
   if (buffer[0] == '{') return false;
 
-  // Check for audio characteristics
-  // Basic rule - binary audio data should have varied byte values
+  // Count different byte values and printable characters
   int different_values = 0;
+  int text_chars = 0;
   bool seen[256] = {false};
-  for (size_t i = 0; i < min(len, (size_t)32); i++) {
+
+  for (size_t i = 0; i < min(len, (size_t)64); i++) {
+    // Count unique byte values
     if (!seen[buffer[i]]) {
       seen[buffer[i]] = true;
       different_values++;
     }
+
+    // Count printable ASCII characters
+    if (buffer[i] >= 32 && buffer[i] <= 126) {
+      text_chars++;
+    }
   }
 
-  // Audio data typically has at least 8+ different byte values in the first 32 bytes
-  return different_values >= 8;
+  // Audio data typically has many different byte values
+  // and not too high a percentage of printable text characters
+  return (different_values >= 12) && (text_chars < min(len, (size_t)64) / 2);
 }
 
 // Reset the audio state
@@ -417,8 +490,15 @@ void resetAudioState() {
   audioBufferOffset = 0;
   currentState = IDLE;
   updateLED(currentState);
+
+  // Reset audio playback buffer
+  audioPlaybackBufferPos = 0;
+
   delay(100);  // Give hardware time to stabilize
   initI2SMic();
+
+  // Update activity timestamp
+  lastActivityTime = millis();
 }
 
 void wordWrapText(const String &text, int maxWidth, std::vector<String> &lines) {
@@ -469,7 +549,6 @@ bool checkButtonPress(Button &btn) {
   }
   return false;
 }
-
 
 void displayText(const String &text, int scrollOffset = 0) {
   // Clear screen
@@ -676,75 +755,79 @@ void initI2SSpeaker() {
 void setup() {
   M5.begin(true, true, true, true);  // Init LCD, power, SD card and serial
   Serial.begin(115200);
-  M5.Lcd.clear();
-  M5.Lcd.setTextColor(WHITE);
-  M5.Lcd.setTextSize(2);
-  M5.Lcd.setCursor(0, 20);
-  M5.Lcd.println("Starting up...");
 
-  // Check if we want to force config mode
-  bool forceConfig = forceConfigMode();
+  // Check wake reason first thing
+  esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
 
-  // Initialize SPIFFS (for saving settings)
-  if (!SPIFFS.begin(true)) {
-    Serial.println("SPIFFS mount failed!");
-  }
-
-  // Attempt to allocate the buffer in PSRAM
-  audioBuffer = (uint8_t*) heap_caps_malloc(AUDIO_BUFFER_SIZE, MALLOC_CAP_SPIRAM);
-  if (audioBuffer == NULL) {
-    Serial.println("Failed to allocate audioBuffer in PSRAM. Reducing buffer size...");
-    // Fallback: try a smaller size in internal DRAM
-    #undef AUDIO_BUFFER_SIZE
-    #define AUDIO_BUFFER_SIZE (1024 * 80)
-    audioBuffer = (uint8_t*) malloc(AUDIO_BUFFER_SIZE);
-    if (audioBuffer == NULL) {
-      Serial.println("Critical error: unable to allocate audioBuffer!");
-      M5.Lcd.println("ERROR: Memory allocation failed");
-      while(1);
-    }
-  }
-  Serial.printf("audioBuffer allocated, size: %d bytes\n", AUDIO_BUFFER_SIZE);
-  // M5.Lcd.println("Memory allocated");
-
-
-  WifiCredentials creds;
-  bool configMode = false;
-
-  // If forced, skip loading config
-  if (forceConfig || !loadWifiConfig(creds)) {
-    configMode = true;
+  // For light sleep we only need to check if wakeup comes from EXT0
+  // Light sleep resumes execution after esp_light_sleep_start()
+  if (wakeup_reason == ESP_SLEEP_WAKEUP_EXT0) {
+    Serial.println("Wakeup caused by external signal using RTC_IO");
+    // We don't call wakeFromSleep() here because light sleep
+    // will already resume execution after the sleep function
   } else {
-    globalCreds = creds;
-    M5.Lcd.setCursor(40, 200);
-    M5.Lcd.println("Connecting to WiFi...");
-    if (!connectToWiFi(creds.ssid, creds.password)) {
-      configMode = true;
-    }
-  }
-
-  if (configMode) {
-    // Start configuration portal only
-    startConfigPortal();
-    Serial.println("In config mode; connect to the AP 'Tico_Config' to configure WiFi & server settings.");
-  } else {
-    // When configuration is valid, continue with audio processing
+    // Normal startup
     M5.Lcd.clear();
+    M5.Lcd.setTextColor(WHITE);
+    M5.Lcd.setTextSize(2);
     M5.Lcd.setCursor(0, 20);
-    M5.Lcd.println("WiFi connected!");
-    M5.Lcd.println("IP: " + WiFi.localIP().toString());
-    M5.Lcd.println("\nServer:\n" + globalCreds.server);
-    delay(2000);
+    M5.Lcd.println("Starting up...");
 
-    Serial.println("WiFi connected! IP address: " + WiFi.localIP().toString());
-    udp.begin(6980);
-    Serial.println("Initializing I2S in mic mode...");
-    initI2SMic();
+    // Initialize SPIFFS (for saving settings)
+    if (!SPIFFS.begin(true)) {
+      Serial.println("SPIFFS mount failed!");
+    }
 
-    // Set to idle state and update display
-    currentState = IDLE;
-    updateLED(currentState);
+    // Attempt to allocate the buffer in PSRAM
+    audioBuffer = (uint8_t*) heap_caps_malloc(AUDIO_BUFFER_SIZE, MALLOC_CAP_SPIRAM);
+    if (audioBuffer == NULL) {
+      Serial.println("Failed to allocate audioBuffer in PSRAM. Reducing buffer size...");
+      // Fallback: try a smaller size in internal DRAM
+      #undef AUDIO_BUFFER_SIZE
+      #define AUDIO_BUFFER_SIZE (1024 * 80)
+      audioBuffer = (uint8_t*) malloc(AUDIO_BUFFER_SIZE);
+      if (audioBuffer == NULL) {
+        Serial.println("Critical error: unable to allocate audioBuffer!");
+        M5.Lcd.println("ERROR: Memory allocation failed");
+        while(1);
+      }
+    }
+    Serial.printf("audioBuffer allocated, size: %d bytes\n", AUDIO_BUFFER_SIZE);
+
+    WifiCredentials creds;
+    bool configMode = false;
+
+    // If forced, skip loading config
+    if (forceConfigMode() || !loadWifiConfig(creds)) {
+      configMode = true;
+    } else {
+      globalCreds = creds;
+      M5.Lcd.setCursor(40, 200);
+      M5.Lcd.println("Connecting to WiFi...");
+      if (!connectToWiFi(creds.ssid, creds.password)) {
+        configMode = true;
+      }
+    }
+
+    if (configMode) {
+      // Start configuration portal only
+      startConfigPortal();
+      Serial.println("In config mode; connect to the AP 'Tico_Config' to configure WiFi & server settings.");
+    } else {
+      // When configuration is valid, continue with audio processing
+      Serial.println("WiFi connected! IP address: " + WiFi.localIP().toString());
+      udp.begin(6980);
+      Serial.println("Initializing I2S in mic mode...");
+      initI2SMic();
+
+      // Set to idle state and update display
+      currentState = IDLE;
+      updateLED(currentState);
+    }
   }
+
+  // Initialize last activity time
+  lastActivityTime = millis();
 }
 
 ///////////////////////
@@ -772,10 +855,11 @@ void loop() {
     }
     server.handleClient();
     delay(1); // small delay to ease CPU load
+
+    // Update activity timestamp in config mode too
+    lastActivityTime = millis();
     return; // Skip audio tasks
   }
-
-  // M5.update();
 
   // --- Recording Phase ---
   if (isButtonPressedWithDebounce(M5.BtnA)) {
@@ -796,11 +880,11 @@ void loop() {
     currentState = RECORDING;
     updateLED(currentState);
 
+    // Update activity timestamp
+    lastActivityTime = millis();
+
     // Add immediate visual feedback
     M5.Lcd.fillCircle(160, 120, 40, RED);
-    //M5.Lcd.setTextColor(WHITE, RED);
-    //M5.Lcd.setCursor(90, 200);
-    //M5.Lcd.print("Recording...");
   }
 
   if (isRecording && M5.BtnA.isPressed()) {
@@ -926,12 +1010,18 @@ void loop() {
       delay(100);
 
       // First send the configuration JSON
-      DynamicJsonDocument configDoc(64);
+      DynamicJsonDocument configDoc(256);
       configDoc["includeText"] = true;
+      configDoc["protocolVersion"] = "1.1";          // Increased version
+      configDoc["audioFormat"] = "pcm16";
+      configDoc["sampleRate"] = 16000;
+      configDoc["channels"] = 1;
+      //configDoc["separateResponses"] = true;         // Request clear separation between text and audio
       String configStr;
       serializeJson(configDoc, configStr);
-      client.println(configStr);
-      delay(100); // Short delay to ensure config is processed
+      configStr += "\r\n\r\n";                       // Add double newline as separator
+      //client.println(configStr);
+      delay(200); // Short delay to ensure config is processed
 
       // Then send the audio data
       client.write(audioBuffer, audioBufferOffset);
@@ -981,32 +1071,32 @@ void loop() {
             hasDisplayedText = false;
             responseText = "";
             jsonProcessed = false;
+            // Reset audio buffer
+            audioPlaybackBufferPos = 0;
           }
 
           // Buffer to read data in chunks
-          uint8_t buffer[1024];
+          uint8_t buffer[2048];
           int len = client.read(buffer, sizeof(buffer));
 
           if (len > 0) {
-
             // Check if this looks like JSON or audio data
             if (buffer[0] == '{' && !jsonProcessed) {
               // This is likely JSON data
-
               // Ensure null termination for parsing
-              buffer[min(len, 1023)] = 0;
+              buffer[min(len, 2047)] = 0;
 
               Serial.println("Received JSON data:");
               Serial.println((char*)buffer);
 
               // Parse JSON
-              DynamicJsonDocument doc(2048);
+              DynamicJsonDocument doc(4096);  // Larger buffer for JSON
               DeserializationError error = deserializeJson(doc, (char*)buffer);
 
               if (!error) {
                 if (doc.containsKey("type") && doc["type"] == "text") {
                   // Process text message
-                  responseText = doc["message"].as<String>();
+                  responseText = doc["message"].as<String>();  // Note the  type specifier
                   displayText(responseText, 0);
                   hasDisplayedText = true;
                   jsonProcessed = true;
@@ -1015,7 +1105,7 @@ void loop() {
                   Serial.println(responseText);
                 } else if (doc.containsKey("error")) {
                   // Handle error
-                  String errorMsg = doc["error"].as<String>();
+                  String errorMsg = doc["error"].as<String>();  // Note the  type specifier
                   M5.Lcd.fillScreen(BLACK);
                   M5.Lcd.setCursor(20, 100);
                   M5.Lcd.setTextColor(RED);
@@ -1031,27 +1121,48 @@ void loop() {
             }
             else if (isAudioData(buffer, len)) {
               // This is binary audio data
-              // Serial.printf("Processing %d bytes of audio data\n", len);
+              Serial.printf("Processing %d bytes of audio data\n", len);
 
               // Update audio activity tracking
               lastAudioDataTime = millis();
-              //playbackActive = true;
 
-              // Process the audio data through I2S
-              size_t bytesWritten = 0;
-              esp_err_t result = i2s_write(I2S_PORT, buffer, len, &bytesWritten, 100 / portTICK_PERIOD_MS);
-
-              if (result != ESP_OK) {
-                Serial.printf("I2S write error: %d\n", result);
+              // Use buffered approach for audio playback
+              // If there's room in the buffer, add the data
+              if (audioPlaybackBufferPos + len <= AUDIO_PLAYBACK_BUFFER_SIZE) {
+                memcpy(audioPlaybackBuffer + audioPlaybackBufferPos, buffer, len);
+                audioPlaybackBufferPos += len;
               } else {
-                // Serial.printf("I2S wrote %d bytes\n", bytesWritten);
+                // Buffer is full, play what we have
+                size_t bytesWritten = 0;
+                esp_err_t result = i2s_write(I2S_PORT, audioPlaybackBuffer,
+                                          audioPlaybackBufferPos, &bytesWritten,
+                                          100 / portTICK_PERIOD_MS);
+
+                if (result != ESP_OK) {
+                  Serial.printf("I2S write error: %d\n", result);
+                }
+
+                // Reset buffer and add new data
+                audioPlaybackBufferPos = 0;
+                if (len <= AUDIO_PLAYBACK_BUFFER_SIZE) {
+                  memcpy(audioPlaybackBuffer, buffer, len);
+                  audioPlaybackBufferPos = len;
+                }
               }
 
-              // Check if this is potentially the last packet (small buffer size)
-              if (len < 512) {
-                Serial.println("Received small audio packet, might be the end of stream");
-                // Start a timer to check for end of playback
-                lastAudioDataTime = millis();
+              // If we have enough data or it's been a while, play the buffered audio
+              unsigned long now = millis();
+              if (audioPlaybackBufferPos > 1024 || now - lastAudioProcessTime > 50) {
+                if (audioPlaybackBufferPos > 0) {
+                  size_t bytesWritten = 0;
+                  esp_err_t result = i2s_write(I2S_PORT, audioPlaybackBuffer,
+                                            audioPlaybackBufferPos, &bytesWritten,
+                                            100 / portTICK_PERIOD_MS);
+
+                  // Reset buffer after playback
+                  audioPlaybackBufferPos = 0;
+                  lastAudioProcessTime = now;
+                }
               }
             }
           }
@@ -1104,6 +1215,18 @@ void loop() {
           }
   }
 
+  // Sleep mode check - only when idle and after timeout
+  if (currentState == IDLE && !isRecording &&
+      millis() - lastActivityTime > SLEEP_TIMEOUT_MS &&
+      WiFi.getMode() != WIFI_AP && WiFi.getMode() != WIFI_AP_STA) {
+    goToSleep();
+  }
+
+  // Update activity tracking when buttons are pressed
+  if (M5.BtnA.wasPressed() || M5.BtnB.wasPressed() || M5.BtnC.wasPressed()) {
+    lastActivityTime = millis();
+  }
+
   static unsigned long lastButtonCheck = 0;
   if (millis() - lastButtonCheck > 500) {
     lastButtonCheck = millis();
@@ -1118,7 +1241,141 @@ void loop() {
       } else {
         M5.Lcd.fillCircle(55, 230, 3, BLACK);
       }
+
+      // Show sleep countdown in the bottom right corner
+      unsigned long timeRemaining = 0;
+      if (millis() < lastActivityTime + SLEEP_TIMEOUT_MS) {
+        timeRemaining = (lastActivityTime + SLEEP_TIMEOUT_MS - millis()) / 1000; // seconds
+      }
+
+      // Only update the display when the value changes (every second)
+      static unsigned long lastTimeRemaining = 0;
+      if (timeRemaining != lastTimeRemaining) {
+        lastTimeRemaining = timeRemaining;
+
+        // Clear previous text
+        M5.Lcd.fillRect(260, 230, 90, 20, BLACK);
+
+        // Display countdown if less than 30 seconds
+        if (timeRemaining <= 10) {
+          M5.Lcd.setCursor(260, 230);
+          M5.Lcd.setTextSize(1);
+          M5.Lcd.setTextColor(ORANGE);
+          M5.Lcd.printf("Sleep: %lus", timeRemaining);
+        }
+      }
     }
   }
 
+}
+
+// New function to put device to sleep
+void goToSleep() {
+  Serial.println("Going to sleep mode...");
+
+  // Show sleep message
+  M5.Lcd.clear();
+  M5.Lcd.setCursor(0, 100);
+  M5.Lcd.setTextSize(2);
+  M5.Lcd.setTextColor(WHITE);
+  M5.Lcd.println(" Going to light sleep...");
+  M5.Lcd.println(" Press button A to wake");
+  delay(1000);
+
+  // Clean up audio but maintain WiFi
+  i2s_driver_uninstall(I2S_PORT);
+  M5.Axp.SetSpkEnable(false);
+
+  // Don't disconnect WiFi - keep it alive
+  Serial.println("Maintaining WiFi during sleep");
+
+  // Power management for Core2
+  M5.Axp.SetLDO2(false);      // Turn off LCD backlight
+  // M5.Axp.SetLDO3(false);    // Turn off vibration motor
+  M5.Axp.SetLcdVoltage(2500); // Lower LCD voltage
+
+  // Turn off screen
+  M5.Lcd.sleep();
+
+  // Configure wakeup source (BtnA - GPIO39)
+  esp_sleep_enable_ext0_wakeup(GPIO_NUM_39, 0); // Button A is on GPIO39, wake on LOW
+
+  // Enable WiFi to stay connected during light sleep
+  esp_wifi_set_ps(WIFI_PS_NONE); // Disable WiFi power saving
+
+  // Use light sleep instead of deep sleep to maintain WiFi
+  Serial.println("Entering light sleep mode");
+  esp_light_sleep_start();
+
+  // Code will continue here after waking from light sleep
+  Serial.println("Woke from light sleep");
+
+  // Call the wake function directly - light sleep returns to this point
+  wakeFromSleep();
+}
+
+// New function to wake up properly - optimized for light sleep
+void wakeFromSleep() {
+  // Re-enable power management for Core2
+  M5.Axp.SetLDO2(true);         // Turn LCD backlight back on
+  M5.Lcd.wakeup();              // Wake up the LCD
+  M5.Axp.SetLcdVoltage(3300);   // Restore LCD voltage
+
+  // Check WiFi - should still be connected in light sleep
+  M5.Lcd.clear();
+  M5.Lcd.setCursor(0, 80);
+  M5.Lcd.setTextSize(2);
+  M5.Lcd.setTextColor(WHITE);
+
+  if (WiFi.status() == WL_CONNECTED) {
+    M5.Lcd.println("WiFi maintained!");
+    M5.Lcd.println("IP: " + WiFi.localIP().toString());
+    Serial.println("WiFi still connected: " + WiFi.localIP().toString());
+
+    // Make sure UDP is initialized
+    udp.begin(6980);
+    Serial.println("UDP initialized on port 6980");
+  } else {
+    // Light reconnect attempt with minimal hardware reset
+    M5.Lcd.println("Reconnecting WiFi...");
+    Serial.println("Light reconnection attempt");
+
+    // Do a minimal reconnect without full reset
+    WiFi.disconnect();
+    delay(100);
+    WiFi.begin(globalCreds.ssid.c_str(), globalCreds.password.c_str());
+
+    // Short wait for reconnection
+    unsigned long startTime = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - startTime < 5000) {
+      delay(500);
+      M5.Lcd.print(".");
+    }
+
+    if (WiFi.status() == WL_CONNECTED) {
+      M5.Lcd.setCursor(0, 110);
+      M5.Lcd.println("WiFi reconnected!");
+      M5.Lcd.println("IP: " + WiFi.localIP().toString());
+
+      // Initialize UDP
+      udp.begin(6980);
+    } else {
+      M5.Lcd.setCursor(0, 110);
+      M5.Lcd.println("WiFi failed to reconnect");
+      M5.Lcd.println("Status: " + String(WiFi.status()));
+
+      // Still try to initialize UDP
+      udp.begin(6980);
+    }
+  }
+
+  // Reinitialize I2S microphone
+  initI2SMic();
+
+  // Reset state and show ready screen
+  currentState = IDLE;
+  updateLED(currentState);
+
+  // Update activity timestamp
+  lastActivityTime = millis();
 }

@@ -19,13 +19,15 @@ const INCLUDE_TEXT_WITH_AUDIO = process.env.INCLUDE_TEXT_WITH_AUDIO !== 'false'
 const WHISPER_VAD_FILTER = process.env.WHISPER_VAD_FILTER || 'false'
 const GROQ_API_KEY = process.env.GROQ_API_KEY
 const USE_GROQ = process.env.USE_GROQ === 'true'
+const TTS_PLAYBACK_RATE = parseFloat(process.env.TTS_PLAYBACK_RATE || '1.0') // Default to normal speed (1.0)
 
 // Groq specific settings (used if USE_GROQ is true)
 const GROQ_API_URL =
   process.env.GROQ_API_URL ||
   'https://api.groq.com/openai/v1/audio/transcriptions'
-const GROQ_MODEL = process.env.GROQ_MODEL || 'whisper-large-v3-turbo'
-const GROQ_LANGUAGE = process.env.GROQ_LANGUAGE // Optional, ISO-639-1 code (e.g., 'en', 'fr')
+const GROQ_WHISPER_MODEL =
+  process.env.GROQ_WHISPER_MODEL || 'whisper-large-v3-turbo'
+const GROQ_WHISPER_LANGUAGE = process.env.GROQ_WHISPER_LANGUAGE // Optional, ISO-639-1 code (e.g., 'en', 'fr')
 
 if (!VF_DM_API_KEY) {
   console.error(
@@ -43,9 +45,9 @@ if (USE_GROQ) {
   }
   console.log('Using Groq for transcription.')
   console.log(` Groq API URL: ${GROQ_API_URL}`)
-  console.log(` Groq Model: ${GROQ_MODEL}`)
-  if (GROQ_LANGUAGE) {
-    console.log(` Groq Language: ${GROQ_LANGUAGE}`)
+  console.log(` Groq Model: ${GROQ_WHISPER_MODEL}`)
+  if (GROQ_WHISPER_LANGUAGE) {
+    console.log(` Groq Language: ${GROQ_WHISPER_LANGUAGE}`)
   } else {
     console.log(` Groq Language: Not specified (multilingual detection)`)
   }
@@ -56,6 +58,7 @@ if (USE_GROQ) {
 console.log(`UDP server will listen on port: ${UDP_PORT}`)
 console.log(`TCP server will listen on port: ${TCP_PORT}`)
 console.log(`Include text with audio: ${INCLUDE_TEXT_WITH_AUDIO}`)
+console.log(`TTS playback rate: ${TTS_PLAYBACK_RATE}`)
 
 // ---------------------------
 // Global Buffer for Audio Data
@@ -378,9 +381,9 @@ async function transcribeAudio(audioWavBuffer) {
         contentType: 'audio/mpeg',
         knownLength: mp3Buffer.length,
       })
-      form.append('model', GROQ_MODEL)
-      if (GROQ_LANGUAGE) {
-        form.append('language', GROQ_LANGUAGE)
+      form.append('model', GROQ_WHISPER_MODEL)
+      if (GROQ_WHISPER_LANGUAGE) {
+        form.append('language', GROQ_WHISPER_LANGUAGE)
       }
 
       const response = await axios.post(GROQ_API_URL, form, {
@@ -564,9 +567,9 @@ async function handleBase64Audio(audioUrl, socket, message, includeText) {
       samples.push(pcmBuffer.readInt16LE(i))
     }
 
-    // Downsample to 16kHz using linear interpolation
+    // Downsample to 16kHz using linear interpolation with playback rate adjustment
     const adjustedSamples = []
-    const ratio = inputSampleRate / outputSampleRate // Should be ~2.75625
+    const ratio = (inputSampleRate / outputSampleRate) * TTS_PLAYBACK_RATE // Apply playback rate adjustment
     const outputLength = Math.floor(samples.length / ratio)
 
     for (let i = 0; i < outputLength; i++) {
@@ -588,7 +591,7 @@ async function handleBase64Audio(audioUrl, socket, message, includeText) {
     }
 
     console.log(
-      `Resampled audio from ${samples.length} samples (${inputSampleRate}Hz) to ${adjustedSamples.length} samples (${outputSampleRate}Hz)`
+      `Resampled audio from ${samples.length} samples (${inputSampleRate}Hz) to ${adjustedSamples.length} samples (${outputSampleRate}Hz) with playback rate ${TTS_PLAYBACK_RATE}`
     )
 
     const adjustedBuffer = Buffer.alloc(adjustedSamples.length * 2)
