@@ -1,6 +1,6 @@
 # Tico Nano UDP Audio Server
 
-A Node.js server that receives raw PCM audio data over UDP, processes it through Whisper for transcription, and returns Voiceflow TTS responses.
+A Node.js server that receives raw PCM audio data over UDP, processes it through Whisper for transcription, send text to Voiceflow Dialog Manager, and returns Voiceflow TTS responses.
 
 ## Features
 
@@ -213,6 +213,70 @@ The project includes an integrated Whisper ASR service using the [openai-whisper
 - For multi-language support, use standard models like `medium` or `large-v3`
 - Enable VAD filtering to improve transcription quality and reduce processing time
 
-## License
+## M5Stack Device Support
 
-MIT
+The project includes Arduino sketches for M5Stack devices to enable voice interactions:
+
+### M5Stack Atom Echo
+Located in `arduino/atom_echo.ino`, this sketch enables:
+- Audio capture using the built-in microphone
+- Sending audio data over UDP to the server
+- Playing back TTS audio responses through the speaker
+
+### M5Stack Core2
+Located in `arduino/core2.ino`, this sketch provides:
+- Audio capture using the built-in microphone
+- Sending audio data over UDP to the server
+- Playing back TTS audio responses through the speaker
+- Displaying transcribed text and responses on the built-in screen
+
+### Setup Instructions
+
+1. **Hardware Requirements**
+   - M5Stack Atom Echo or M5Stack Core2 device
+   - USB Type-C cable for programming
+   - Computer with Arduino IDE installed
+
+2. **Software Setup**
+   - Install the Arduino IDE (version 1.8.0 or later)
+   - Install required libraries through Arduino Library Manager:
+     - M5Stack (for Core2) or M5Atom (for Atom Echo)
+     - ArduinoJson
+     - FastLED
+     - AudioTools
+
+3. **Device Configuration**
+   - Connect your M5Stack device to your computer via USB
+   - Open the appropriate sketch (`atom_echo.ino` or `core2.ino`) in Arduino IDE
+   - Select the correct board and port in Arduino IDE:
+     - For Atom Echo: Tools → Board → ESP32 Arduino → M5Atom
+     - For Core2: Tools → Board → ESP32 Arduino → M5Core2
+
+4. **First-Time Setup**
+   - Upload the sketch to your device
+   - On first boot, the device will create a WiFi access point named "Tico_Config"
+   - Connect to this WiFi network from your computer or phone
+   - Open a web browser and navigate to `http://tico-config.local` or the IP address shown on the device
+   - In the configuration portal:
+     - Select your WiFi network
+     - Enter your WiFi password
+     - Enter your server address (e.g., `192.168.1.100` or `https://myserver.com:12345`)
+   - Click Save and wait for the device to reboot
+
+5. **Using the Device**
+   - **Atom Echo**: Press and hold the button to record, release to send
+   - **Core2**: Press and hold button A to record, release to send
+   - During recording:
+     - Red indicator shows recording in progress
+     - Blue indicator shows processing
+     - Green indicator shows playing response
+   - **Core2 Only**: Use buttons B and C to scroll through text responses
+
+6. **Troubleshooting**
+   - If the device fails to connect to WiFi, hold the button for 5 seconds during startup to force configuration mode
+   - For Atom Echo: The LED will blink red in configuration mode
+   - For Core2: The screen will show configuration instructions
+   - If audio quality is poor, ensure the device is in a quiet environment and the microphone is unobstructed
+
+
+
