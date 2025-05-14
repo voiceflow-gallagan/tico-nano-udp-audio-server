@@ -11,6 +11,7 @@ import fs from 'fs'
 
 // Environment Variables
 const VF_DM_API_KEY = process.env.VF_DM_API_KEY
+const VF_VERSION_ID = process.env.VF_VERSION_ID || development
 const WHISPER_SERVER_URL =
   process.env.WHISPER_SERVER_URL || 'http://whisper-asr:9000'
 const UDP_PORT = parseInt(process.env.UDP_PORT || '6980')
@@ -507,6 +508,7 @@ async function getVoiceflowResponse(transcribedText) {
         headers: {
           Authorization: VF_DM_API_KEY,
           'Content-Type': 'application/json',
+          versionID: VF_VERSION_ID,
         },
       }
     )

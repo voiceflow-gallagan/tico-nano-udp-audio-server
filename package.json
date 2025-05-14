@@ -1,6 +1,6 @@
 {
   "name": "tico-nano-udp-audio-server",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "type": "module",
   "description": "UDP Audio Server for Tico Nano - Receives raw PCM audio, processes it through Whisper, and returns Voiceflow TTS responses",
   "main": "server.js",

@@ -29,6 +29,7 @@ Then edit the `.env` file with your specific values:
 ```env
 # Voiceflow API Key
 VF_DM_API_KEY=your_voiceflow_api_key
+VF_VERSION_ID=development  # Optional, defaults to 'development'. Specifies which version of your Voiceflow project to use.
 
 # Port Configuration
 UDP_PORT=6980  # Optional, defaults to 6980
