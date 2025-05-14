@@ -16,7 +16,7 @@
 WebServer server(80);
 
 // Sleep timeout in milliseconds
-#define SLEEP_TIMEOUT_MS 30000  // 30 second of inactivity before sleep
+#define SLEEP_TIMEOUT_MS 120000  // 2 minutes of inactivity before sleep
 unsigned long lastActivityTime = 0;
 
 ///////////////////////
